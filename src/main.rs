@@ -1,6 +1,25 @@
 use std::fs::OpenOptions;
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::time::Instant;
+
+struct Config {
+    path: PathBuf,
+    batches: u64,
+    records_per_batch: usize,
+    record_bytes: usize,
+}
+
+fn config() -> Config {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    Config {
+        path: args.first().map(PathBuf::from).unwrap_or_else(|| "heap.data".into()),
+        batches: args.get(1).and_then(|v| v.parse().ok()).unwrap_or(256),
+        records_per_batch: args.get(2).and_then(|v| v.parse().ok()).unwrap_or(16),
+        record_bytes: args.get(3).and_then(|v| v.parse().ok()).unwrap_or(4096),
+    }
+}
+
 
 fn randomData(state: &mut u64, records: usize, record_bytes: usize) -> Vec<u8> {
     let mut data = vec![0u8; records * record_bytes];
@@ -23,47 +42,37 @@ fn randomData(state: &mut u64, records: usize, record_bytes: usize) -> Vec<u8> {
 }
 
 
-fn write(file: &mut std::fs::File, batch: &[u8]) -> io::Result<()> {
+fn writeBatch(file: &mut std::fs::File, batch: &[u8]) -> io::Result<()> {
     file.write_all(batch)
 }
 
 
 
 fn main() -> io::Result<()> {
-    const BATCHES: u64 = 256;
-    const RECORDS_PER_BATCH: usize = 16;
-    const RECORD_BYTES: usize = 4096;
-    const REPORT_EVERY: u64 = 32;
-    let mut state = 0x1234_5678_9ABC_DEF0;
+    let cfg = config();
 
-    let path = "heap.data";
+    let mut state = 0x1234_5678_9ABC_DEF0;
 
     let mut file = OpenOptions::new()
         .create(true)
         .truncate(true)
         .write(true)
-        .open(path)?;
+        .open(&cfg.path)?;
 
     let started = Instant::now();
     let mut generated = 0u64;
 
-    let mut records = 0u64;
-
-    for batch_no in 0..BATCHES {
-        let batch = randomData(&mut state, RECORDS_PER_BATCH, RECORD_BYTES);
-        write(&mut file, &batch)?;
+    for _ in 0..cfg.batches {
+        let batch = randomData(&mut state, cfg.records_per_batch, cfg.record_bytes);
+        writeBatch( &mut file, &batch )?;
         generated += batch.len() as u64;
-        records += RECORDS_PER_BATCH as u64;
-        if ( batch_no + 1 ) % REPORT_EVERY == 0 {
-            let seconds = started.elapsed().as_secs_f64();
-
-            println!("records={records} throughput_mib_s={:.2}", generated as f64 / seconds / 1_048_576.0);
-        }
     }
 
     file.sync_data()?;
 
-    println!("generated_bytes={generated} records={records}");
+    let seconds = started.elapsed().as_secs_f64();
+
+    println!("path={} bytes={generated} seconds={seconds:.3} mib_s={:.2}", cfg.path.display(), generated as f64 / seconds / 1_048_576.0);
 
     Ok(())
 }
