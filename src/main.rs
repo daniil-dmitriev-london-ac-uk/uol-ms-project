@@ -21,24 +21,23 @@ fn config() -> Config {
 }
 
 
-fn randomData(state: &mut u64, records: usize, record_bytes: usize) -> Vec<u8> {
-    let mut data = vec![0u8; records * record_bytes];
-    let mut offset = 0;
+fn nextRandom(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut value = *state;
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
+}
 
-    while offset < data.len() {
-        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut value = *state;
-        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        value ^= value >> 31;
-        let bytes = value.to_le_bytes();
-        let take = (data.len() - offset).min(8);
 
-        data[offset..offset + take].copy_from_slice(&bytes[..take]);
-        offset += take;
+fn randomData(state: &mut u64, data: &mut Vec<u8>, records: usize, record_bytes: usize) {
+    data.clear();
+    data.resize(records * record_bytes, 0);
+
+    for chunk in data.chunks_mut(8) {
+        let value = nextRandom(state).to_le_bytes();
+        chunk.copy_from_slice(&value[..chunk.len()]);
     }
-
-    data
 }
 
 
@@ -53,18 +52,16 @@ fn main() -> io::Result<()> {
 
     let mut state = 0x1234_5678_9ABC_DEF0;
 
-    let mut file = OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&cfg.path)?;
+    let mut batch = Vec::with_capacity( cfg.records_per_batch * cfg.record_bytes );
+
+    let mut file = OpenOptions::new().create(true).truncate(true).write(true).open(&cfg.path)?;
 
     let started = Instant::now();
     let mut generated = 0u64;
 
     for _ in 0..cfg.batches {
-        let batch = randomData(&mut state, cfg.records_per_batch, cfg.record_bytes);
-        writeBatch( &mut file, &batch )?;
+        randomData(&mut state, &mut batch, cfg.records_per_batch, cfg.record_bytes);
+        writeBatch(&mut file, &batch)?;
         generated += batch.len() as u64;
     }
 
