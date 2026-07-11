@@ -1,27 +1,8 @@
-use std::fs::OpenOptions;
-use std::io::{self, Write};
-use std::path::PathBuf;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::time::Instant;
 
-struct Config {
-    path: PathBuf,
-    batches: u64,
-    records_per_batch: usize,
-    record_bytes: usize,
-}
-
-fn config() -> Config {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    Config {
-        path: args.first().map(PathBuf::from).unwrap_or_else(|| "heap.data".into()),
-        batches: args.get(1).and_then(|v| v.parse().ok()).unwrap_or(256),
-        records_per_batch: args.get(2).and_then(|v| v.parse().ok()).unwrap_or(16),
-        record_bytes: args.get(3).and_then(|v| v.parse().ok()).unwrap_or(4096),
-    }
-}
-
-
-fn nextRandom(state: &mut u64) -> u64 {
+fn next_random(state: &mut u64) -> u64 {
     *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
     let mut value = *state;
     value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -30,46 +11,63 @@ fn nextRandom(state: &mut u64) -> u64 {
 }
 
 
-fn randomData(state: &mut u64, data: &mut Vec<u8>, records: usize, record_bytes: usize) {
+fn random_data(state: &mut u64, data: &mut Vec<u8>, bytes: usize) {
     data.clear();
-    data.resize(records * record_bytes, 0);
+    data.resize(bytes, 0);
 
     for chunk in data.chunks_mut(8) {
-        let value = nextRandom(state).to_le_bytes();
+        let value = next_random(state).to_le_bytes();
         chunk.copy_from_slice(&value[..chunk.len()]);
     }
 }
 
 
-fn writeBatch(file: &mut std::fs::File, batch: &[u8]) -> io::Result<()> {
-    file.write_all(batch)
+fn write_record(file: &mut File, payload: &[u8]) -> io::Result<u64> {
+    let offset = file.stream_position()?;
+    file.write_all(&(payload.len() as u64).to_le_bytes())?;
+    file.write_all(payload)?;
+
+    Ok(offset)
+}
+
+
+fn read_record(file: &mut File, offset: u64, out: &mut Vec<u8>) -> io::Result<()> {
+    file.seek(SeekFrom::Start(offset))?;
+    let mut len = [0u8; 8];
+    file.read_exact(&mut len)?;
+    out.resize(u64::from_le_bytes(len) as usize, 0);
+    file.read_exact(out)
 }
 
 
 
 fn main() -> io::Result<()> {
-    let cfg = config();
+    const RECORDS: u64 = 4096;
+    const RECORD_BYTES: usize = 4096;
+    let path = std::env::args().nth(1).unwrap_or_else(|| "heap.data".into());
 
-    let mut state = 0x1234_5678_9ABC_DEF0;
+    let mut file = OpenOptions::new().create(true).truncate(true).read(true).write(true).open(path)?;
 
-    let mut batch = Vec::with_capacity( cfg.records_per_batch * cfg.record_bytes );
+    let mut state = 42u64;
 
-    let mut file = OpenOptions::new().create(true).truncate(true).write(true).open(&cfg.path)?;
+    let mut payload = Vec::with_capacity(RECORD_BYTES);
+    let mut offsets = Vec::with_capacity(RECORDS as usize);
 
     let started = Instant::now();
-    let mut generated = 0u64;
 
-    for _ in 0..cfg.batches {
-        randomData(&mut state, &mut batch, cfg.records_per_batch, cfg.record_bytes);
-        writeBatch(&mut file, &batch)?;
-        generated += batch.len() as u64;
+    for _ in 0..RECORDS {
+        random_data(&mut state, &mut payload, RECORD_BYTES);
+        offsets.push(write_record(&mut file, &payload)?);
     }
 
     file.sync_data()?;
 
-    let seconds = started.elapsed().as_secs_f64();
+    let mut check = Vec::new();
+    let sample = RECORDS as usize / 2;
+    read_record(&mut file, offsets[sample], &mut check)?;
+    let bytes = RECORDS * RECORD_BYTES as u64;
 
-    println!("path={} bytes={generated} seconds={seconds:.3} mib_s={:.2}", cfg.path.display(), generated as f64 / seconds / 1_048_576.0);
+    println!("records={RECORDS} bytes={bytes} sample_bytes={} mib_s={:.2}", check.len(), bytes as f64 / started.elapsed().as_secs_f64() / 1_048_576.0);
 
     Ok(())
 }
