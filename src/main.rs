@@ -30,9 +30,9 @@ fn write(file: &mut std::fs::File, data: &[u8]) -> io::Result<()> {
 
 
 fn main() -> io::Result<()> {
-    let iterations = 256u64;
-    let bytes_per_iteration = 64 * 1024usize;
-
+    const ITERATIONS: u64 = 512;
+    const BYTES_PER_ITERATION: usize = 64 * 1024;
+    const REPORT_EVERY: u64 = 64;
     let mut state = 0x1234_5678_9ABC_DEF0;
 
     let path = "heap.data";
@@ -46,10 +46,15 @@ fn main() -> io::Result<()> {
     let started = Instant::now();
     let mut generated = 0u64;
 
-    for _ in 0..iterations {
-        let data = randomData(&mut state, bytes_per_iteration);
+    for iteration in 0..ITERATIONS {
+        let data = randomData(&mut state, BYTES_PER_ITERATION);
         write(&mut file, &data)?;
         generated += data.len() as u64;
+        if ( iteration + 1 ) % REPORT_EVERY == 0 {
+            let seconds = started.elapsed().as_secs_f64();
+
+            println!("progress_bytes={generated} throughput_mib_s={:.2}", generated as f64 / seconds / 1_048_576.0);
+        }
     }
 
     let seconds = started.elapsed().as_secs_f64();
