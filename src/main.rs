@@ -44,6 +44,7 @@ fn read_record(file: &mut File, offset: u64, out: &mut Vec<u8>) -> io::Result<()
 fn main() -> io::Result<()> {
     const RECORDS: u64 = 4096;
     const RECORD_BYTES: usize = 4096;
+    const SYNC_EVERY: u64 = 256;
     let path = std::env::args().nth(1).unwrap_or_else(|| "heap.data".into());
 
     let mut file = OpenOptions::new().create(true).truncate(true).read(true).write(true).open(path)?;
@@ -55,9 +56,12 @@ fn main() -> io::Result<()> {
 
     let started = Instant::now();
 
-    for _ in 0..RECORDS {
+    for record in 0..RECORDS {
         random_data(&mut state, &mut payload, RECORD_BYTES);
         offsets.push(write_record(&mut file, &payload)?);
+        if (record + 1) % SYNC_EVERY == 0 {
+            file.sync_data()?;
+        }
     }
 
     file.sync_data()?;
