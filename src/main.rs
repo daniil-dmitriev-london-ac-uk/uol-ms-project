@@ -55,23 +55,20 @@ fn read_record(data: &mut File, index: &mut File, id: u64, out: &mut Vec<u8>) ->
 
 
 
-fn main() -> io::Result<()> {
-    const RECORDS: u64 = 4096;
-    const RECORD_BYTES: usize = 4096;
-    const SYNC_EVERY: u64 = 256;
+fn run(record_bytes: usize, records: u64, sync_every: u64) -> io::Result<()> {
     let mut data = OpenOptions::new().create(true).truncate(true).read(true).write(true).open("heap.data")?;
     let mut index = OpenOptions::new().create(true).truncate(true).read(true).write(true).open("heap.index")?;
 
     let mut state = 42u64;
 
-    let mut payload = Vec::with_capacity(RECORD_BYTES);
+    let mut payload = Vec::with_capacity(record_bytes);
 
     let started = Instant::now();
 
-    for id in 0..RECORDS {
-        random_data(&mut state, &mut payload, RECORD_BYTES);
+    for id in 0..records {
+        random_data(&mut state, &mut payload, record_bytes);
         write_record(&mut data, &mut index, id, &payload)?;
-        if (id + 1) % SYNC_EVERY == 0 {
+        if (id + 1) % sync_every == 0 {
             data.sync_data()?;
             index.sync_data()?;
         }
@@ -79,13 +76,25 @@ fn main() -> io::Result<()> {
 
     let mut out = Vec::new();
 
-    for id in [0, RECORDS / 2, RECORDS - 1] {
+    for id in [0, records / 2, records - 1] {
         read_record(&mut data, &mut index, id, &mut out)?;
     }
 
-    let bytes = RECORDS * RECORD_BYTES as u64;
+    let bytes = records * record_bytes as u64;
 
-    println!("records={RECORDS} bytes={bytes} mib_s={:.2}", bytes as f64 / started.elapsed().as_secs_f64() / 1_048_576.0);
+    println!("records={records} bytes={bytes} mib_s={:.2}", bytes as f64 / started.elapsed().as_secs_f64() / 1_048_576.0);
+
+    Ok(())
+}
+
+
+
+fn main() -> io::Result<()> {
+    let sizes = [1024usize, 4096, 64 * 1024];
+
+    for size in sizes {
+        run(size, 4096, 256)?;
+    }
 
     Ok(())
 }
