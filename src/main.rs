@@ -22,21 +22,35 @@ fn random_data(state: &mut u64, data: &mut Vec<u8>, bytes: usize) {
 }
 
 
-fn write_record(file: &mut File, payload: &[u8]) -> io::Result<u64> {
-    let offset = file.stream_position()?;
-    file.write_all(&(payload.len() as u64).to_le_bytes())?;
-    file.write_all(payload)?;
+fn write_record(data: &mut File, index: &mut File, id: u64, payload: &[u8]) -> io::Result<()> {
+    let offset = data.stream_position()?;
+    data.write_all(&(payload.len() as u64).to_le_bytes())?;
+    data.write_all(&id.to_le_bytes())?;
+    data.write_all(payload)?;
 
-    Ok(offset)
+    index.write_all(&offset.to_le_bytes())?;
+    index.write_all(&(payload.len() as u64 + 16).to_le_bytes())
 }
 
 
-fn read_record(file: &mut File, offset: u64, out: &mut Vec<u8>) -> io::Result<()> {
-    file.seek(SeekFrom::Start(offset))?;
-    let mut len = [0u8; 8];
-    file.read_exact(&mut len)?;
-    out.resize(u64::from_le_bytes(len) as usize, 0);
-    file.read_exact(out)
+fn read_record(data: &mut File, index: &mut File, id: u64, out: &mut Vec<u8>) -> io::Result<()> {
+    index.seek(SeekFrom::Start(id * 16))?;
+    let mut slot = [0u8; 16];
+    index.read_exact(&mut slot)?;
+    let offset = u64::from_le_bytes(slot[..8].try_into().unwrap());
+
+    data.seek(SeekFrom::Start(offset))?;
+    let mut header = [0u8; 16];
+    data.read_exact(&mut header)?;
+    let len = u64::from_le_bytes(header[..8].try_into().unwrap()) as usize;
+    let stored_id = u64::from_le_bytes(header[8..].try_into().unwrap());
+
+    if stored_id != id {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "record id mismatch"));
+    }
+
+    out.resize(len, 0);
+    data.read_exact(out)
 }
 
 
@@ -45,33 +59,33 @@ fn main() -> io::Result<()> {
     const RECORDS: u64 = 4096;
     const RECORD_BYTES: usize = 4096;
     const SYNC_EVERY: u64 = 256;
-    let path = std::env::args().nth(1).unwrap_or_else(|| "heap.data".into());
-
-    let mut file = OpenOptions::new().create(true).truncate(true).read(true).write(true).open(path)?;
+    let mut data = OpenOptions::new().create(true).truncate(true).read(true).write(true).open("heap.data")?;
+    let mut index = OpenOptions::new().create(true).truncate(true).read(true).write(true).open("heap.index")?;
 
     let mut state = 42u64;
 
     let mut payload = Vec::with_capacity(RECORD_BYTES);
-    let mut offsets = Vec::with_capacity(RECORDS as usize);
 
     let started = Instant::now();
 
-    for record in 0..RECORDS {
+    for id in 0..RECORDS {
         random_data(&mut state, &mut payload, RECORD_BYTES);
-        offsets.push(write_record(&mut file, &payload)?);
-        if (record + 1) % SYNC_EVERY == 0 {
-            file.sync_data()?;
+        write_record(&mut data, &mut index, id, &payload)?;
+        if (id + 1) % SYNC_EVERY == 0 {
+            data.sync_data()?;
+            index.sync_data()?;
         }
     }
 
-    file.sync_data()?;
+    let mut out = Vec::new();
 
-    let mut check = Vec::new();
-    let sample = RECORDS as usize / 2;
-    read_record(&mut file, offsets[sample], &mut check)?;
+    for id in [0, RECORDS / 2, RECORDS - 1] {
+        read_record(&mut data, &mut index, id, &mut out)?;
+    }
+
     let bytes = RECORDS * RECORD_BYTES as u64;
 
-    println!("records={RECORDS} bytes={bytes} sample_bytes={} mib_s={:.2}", check.len(), bytes as f64 / started.elapsed().as_secs_f64() / 1_048_576.0);
+    println!("records={RECORDS} bytes={bytes} mib_s={:.2}", bytes as f64 / started.elapsed().as_secs_f64() / 1_048_576.0);
 
     Ok(())
 }
