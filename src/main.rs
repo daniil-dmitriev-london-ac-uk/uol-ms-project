@@ -1,30 +1,43 @@
 mod append;
-
-use append::{append_record, flush_append, open_append, read_append};
+mod bucket;
 
 use std::io;
 use std::path::Path;
-use std::time::Instant;
+
+const USE_BUCKET: bool = true;
 
 fn main() -> io::Result<()> {
-    let mut store = open_append(Path::new("append-store"))?;
-
     let payload = vec![7u8; 4096];
 
-    let started = Instant::now();
+    if USE_BUCKET {
+        let mut store = bucket::open_bucket(Path::new("bucket-store"))?;
 
-    let mut ids = Vec::new();
+        let mut ids = Vec::new();
 
-    for _ in 0..4096 {
-        ids.push(append_record(&mut store, &payload)?);
+        for key in 0..4096u64 {
+            ids.push(bucket::bucket_record(&mut store, key % 8, &payload)?);
+        }
+
+        bucket::flush_bucket(&mut store)?;
+        let mut out = Vec::new();
+        bucket::read_bucket(&mut store, ids[100], &mut out)?;
+
+        println!("layout=bucket records={} sample_bytes={}", ids.len(), out.len());
+    } else {
+        let mut store = append::open_append(Path::new("append-store"))?;
+
+        let mut ids = Vec::new();
+
+        for _ in 0..4096 {
+            ids.push(append::append_record(&mut store, &payload)?);
+        }
+
+        append::flush_append(&mut store)?;
+        let mut out = Vec::new();
+        append::read_append(&mut store, ids[100], &mut out)?;
+
+        println!("layout=append records={} sample_bytes={}", ids.len(), out.len());
     }
-
-    flush_append(&mut store)?;
-
-    let mut out = Vec::new();
-    read_append(&mut store, ids[ids.len() / 2], &mut out)?;
-
-    println!("records={} sample_bytes={} seconds={:.3}", ids.len(), out.len(), started.elapsed().as_secs_f64());
 
     Ok(())
 }
