@@ -4,7 +4,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 const EXTENT_BYTES: u64 = 1 << 20;
-const IDS_PER_BUCKET: u64 = 1 << 20;
+const REGION_SLOTS: u64 = 4096;
 
 #[derive(Clone, Copy)]
 struct Extent {
@@ -17,7 +17,8 @@ pub struct BucketStore {
     data: File,
     index: File,
     extents: HashMap<u64, Vec<Extent>>,
-    counts: HashMap<u64, u64>,
+    regions: HashMap<u64, (u64, u64)>,
+    next_region: u64,
     end: u64,
 }
 
@@ -30,7 +31,7 @@ pub fn open_bucket(dir: &Path) -> io::Result<BucketStore> {
 
     let index = OpenOptions::new().create(true).read(true).write(true).open(dir.join("index.hs"))?;
 
-    Ok(BucketStore { data, index, extents: HashMap::new(), counts: HashMap::new(), end })
+    Ok(BucketStore { data, index, extents: HashMap::new(), regions: HashMap::new(), next_region: 0, end })
 }
 
 
@@ -55,8 +56,18 @@ fn allocate(store: &mut BucketStore, bucket: u64, total: u64) -> u64 {
 
 
 pub fn bucket_record(store: &mut BucketStore, bucket: u64, payload: &[u8]) -> io::Result<u64> {
-    let local = *store.counts.get(&bucket).unwrap_or(&0);
-    let id = bucket * IDS_PER_BUCKET + local;
+    let region = store.regions.entry(bucket).or_insert_with(|| {
+        let start = store.next_region;
+        store.next_region += REGION_SLOTS;
+        (start, 0)
+    });
+
+    if region.1 == REGION_SLOTS {
+        return Err(io::Error::new(io::ErrorKind::OutOfMemory, "bucket index region is full"));
+    }
+
+    let id = region.0 + region.1;
+    region.1 += 1;
     let total = payload.len() as u64 + 24;
     let offset = allocate(store, bucket, total);
 
@@ -69,7 +80,6 @@ pub fn bucket_record(store: &mut BucketStore, bucket: u64, payload: &[u8]) -> io
     store.index.seek(SeekFrom::Start(id * 16))?;
     store.index.write_all(&offset.to_le_bytes())?;
     store.index.write_all(&total.to_le_bytes())?;
-    store.counts.insert(bucket, local + 1);
 
     Ok(id)
 }
