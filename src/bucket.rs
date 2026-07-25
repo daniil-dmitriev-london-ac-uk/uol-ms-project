@@ -16,6 +16,7 @@ struct Extent {
 pub struct BucketStore {
     data: File,
     index: File,
+    registry: File,
     extents: HashMap<u64, Vec<Extent>>,
     regions: HashMap<u64, (u64, u64)>,
     next_region: u64,
@@ -30,19 +31,20 @@ pub fn open_bucket(dir: &Path) -> io::Result<BucketStore> {
     let data = OpenOptions::new().create(true).read(true).write(true).open(data_path)?;
 
     let index = OpenOptions::new().create(true).read(true).write(true).open(dir.join("index.hs"))?;
+    let registry = OpenOptions::new().create(true).append(true).read(true).open(dir.join("registry.hs"))?;
 
-    Ok(BucketStore { data, index, extents: HashMap::new(), regions: HashMap::new(), next_region: 0, end })
+    Ok(BucketStore { data, index, registry, extents: HashMap::new(), regions: HashMap::new(), next_region: 0, end })
 }
 
 
-fn allocate(store: &mut BucketStore, bucket: u64, total: u64) -> u64 {
+fn allocate(store: &mut BucketStore, bucket: u64, total: u64) -> io::Result<u64> {
     let extents = store.extents.entry(bucket).or_default();
 
     if let Some(last) = extents.last_mut() {
         if last.used + total <= last.size {
             let offset = last.start + last.used;
             last.used += total;
-            return offset;
+            return Ok(offset);
         }
     }
 
@@ -51,16 +53,32 @@ fn allocate(store: &mut BucketStore, bucket: u64, total: u64) -> u64 {
 
     extents.push(Extent { start: offset, size, used: total });
     store.end += size;
-    offset
+    store.registry.write_all(&[b'D'])?;
+    store.registry.write_all(&bucket.to_le_bytes())?;
+    store.registry.write_all(&offset.to_le_bytes())?;
+    store.registry.write_all(&size.to_le_bytes())?;
+
+    Ok(offset)
 }
 
 
 pub fn bucket_record(store: &mut BucketStore, bucket: u64, payload: &[u8]) -> io::Result<u64> {
-    let region = store.regions.entry(bucket).or_insert_with(|| {
+    if !store.regions.contains_key(&bucket) {
         let start = store.next_region;
         store.next_region += REGION_SLOTS;
-        (start, 0)
-    });
+        let mut row = Vec::with_capacity(25);
+        row.push(b'S');
+        row.extend_from_slice(&bucket.to_le_bytes());
+        row.extend_from_slice(&start.to_le_bytes());
+        row.extend_from_slice(&REGION_SLOTS.to_le_bytes());
+        store.registry.write_all(&row)?;
+        store.regions.insert(bucket, (start, 0));
+    }
+
+    let region = store
+        .regions
+        .get_mut(&bucket)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "bucket region is missing"))?;
 
     if region.1 == REGION_SLOTS {
         return Err(io::Error::new(io::ErrorKind::OutOfMemory, "bucket index region is full"));
@@ -69,7 +87,7 @@ pub fn bucket_record(store: &mut BucketStore, bucket: u64, payload: &[u8]) -> io
     let id = region.0 + region.1;
     region.1 += 1;
     let total = payload.len() as u64 + 24;
-    let offset = allocate(store, bucket, total);
+    let offset = allocate(store, bucket, total)?;
 
     store.data.seek(SeekFrom::Start(offset))?;
     store.data.write_all(&(payload.len() as u64).to_le_bytes())?;
@@ -108,7 +126,7 @@ pub fn read_bucket(store: &mut BucketStore, id: u64, out: &mut Vec<u8>) -> io::R
 
 pub fn flush_bucket(store: &mut BucketStore) -> io::Result<()> {
     store.data.set_len(store.end)?;
+    store.registry.sync_data()?;
     store.data.sync_data()?;
-
     store.index.sync_data()
 }
