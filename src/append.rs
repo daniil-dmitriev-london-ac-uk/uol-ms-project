@@ -68,3 +68,29 @@ pub fn flush_append(store: &mut AppendStore) -> io::Result<()> {
     store.data.sync_data()?;
     store.index.sync_data()
 }
+
+
+pub struct AppendPlacement {
+    cursor: u64,
+    next_id: u64,
+}
+
+impl AppendPlacement {
+    pub fn new(cursor: u64, next_id: u64) -> Self {
+        AppendPlacement { cursor, next_id }
+    }
+}
+
+impl crate::placement::Placement for AppendPlacement {
+    fn allocate(&mut self, payload_len: u64) -> std::io::Result<(u64, u64)> {
+        let offset = self.cursor;
+        let id = self.next_id;
+
+        self.cursor += payload_len + 16;
+        self.next_id += 1;
+
+        Ok((offset, id))
+    }
+
+    fn note_written(&mut self, _id: u64, _total_len: u64) {}
+}
