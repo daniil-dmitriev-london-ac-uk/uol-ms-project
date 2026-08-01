@@ -10,6 +10,8 @@ use std::path::Path;
 fn main() -> io::Result<()> {
     let mut allocator = append::AppendPlacement::new(0, 0);
     let _ = allocator.allocate(1024)?;
+    let mut bucket_allocator = bucket::BucketPlacement::new(7);
+    let _ = bucket_allocator.allocate(1024)?;
     let layout = std::env::args().nth(1).unwrap_or_else(|| "append".into());
 
     let payload = vec![7u8; 4096];

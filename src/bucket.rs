@@ -130,3 +130,61 @@ pub fn flush_bucket(store: &mut BucketStore) -> io::Result<()> {
     store.data.sync_data()?;
     store.index.sync_data()
 }
+
+
+struct PlacementExtent {
+    start: u64,
+    size: u64,
+    used: u64,
+}
+
+pub struct BucketPlacement {
+    bucket: u64,
+    extents: HashMap<u64, Vec<PlacementExtent>>,
+    next_data: u64,
+    regions: HashMap<u64, (u64, u64)>,
+    next_region: u64,
+}
+
+impl BucketPlacement {
+    pub fn new(bucket: u64) -> Self {
+        BucketPlacement { bucket, extents: HashMap::new(), next_data: 0, regions: HashMap::new(), next_region: 0 }
+    }
+}
+
+impl crate::placement::Placement for BucketPlacement {
+    fn allocate(&mut self, payload_len: u64) -> io::Result<(u64, u64)> {
+        let total = payload_len + 24;
+        let region = self.regions.entry(self.bucket).or_insert_with(|| {
+            let start = self.next_region;
+            self.next_region += REGION_SLOTS;
+            (start, 0)
+        });
+
+        if region.1 >= REGION_SLOTS {
+            return Err(io::Error::new(io::ErrorKind::OutOfMemory, "slot region is full"));
+        }
+
+        let id = region.0 + region.1;
+        region.1 += 1;
+        let extents = self.extents.entry(self.bucket).or_default();
+        let offset = match extents.last_mut() {
+            Some(extent) if extent.used + total <= extent.size => {
+                let offset = extent.start + extent.used;
+                extent.used += total;
+                offset
+            }
+            _ => {
+                let size = total.next_multiple_of(4096).max(EXTENT_BYTES);
+                let offset = self.next_data;
+                self.next_data += size;
+                extents.push(PlacementExtent { start: offset, size, used: total });
+                offset
+            }
+        };
+
+        Ok((offset, id))
+    }
+
+    fn note_written(&mut self, _id: u64, _total_len: u64) {}
+}
