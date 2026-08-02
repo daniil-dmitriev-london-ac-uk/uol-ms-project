@@ -1,40 +1,31 @@
 mod append;
 mod bucket;
 mod placement;
+mod store;
 
-use placement::Placement;
+use append::AppendPlacement;
+use bucket::BucketPlacement;
+use store::Store;
 
 use std::io;
 use std::path::Path;
 
 fn main() -> io::Result<()> {
-    let mut allocator = append::AppendPlacement::new(0, 0);
-    let _ = allocator.allocate(1024)?;
-    let mut bucket_allocator = bucket::BucketPlacement::new(7);
-    let _ = bucket_allocator.allocate(1024)?;
-    let layout = std::env::args().nth(1).unwrap_or_else(|| "append".into());
-
     let payload = vec![7u8; 4096];
 
-    if layout == "append" {
-        let mut store = append::open_append(Path::new( "append-store" ))?;
-        let id = append::append_record(&mut store, &payload)?;
+    let mut append = Store::open(Path::new("append-generic"), AppendPlacement::new(0, 0))?;
+    let mut bucket = Store::open(Path::new("bucket-generic"), BucketPlacement::new(3))?;
+    let append_id = append.insert(&payload)?;
+    let bucket_id = bucket.insert(&payload)?;
 
-        append::flush_append(&mut store)?;
-        let mut out = Vec::new();
-        append::read_append(&mut store, id, &mut out)?;
+    append.flush()?;
+    bucket.flush()?;
 
-        println!("layout=append sample_bytes={}", out.len());
-    } else {
-        let mut store = bucket::open_bucket(Path::new("bucket-store"))?;
-        let id = bucket::bucket_record(&mut store, 3, &payload)?;
+    let mut out = Vec::new();
+    append.read(append_id, &mut out)?;
+    bucket.read(bucket_id, &mut out)?;
 
-        bucket::flush_bucket(&mut store)?;
-        let mut out = Vec::new();
-        bucket::read_bucket(&mut store, id, &mut out)?;
-
-        println!("layout=bucket sample_bytes={}", out.len());
-    }
+    println!("generic_store_sample_bytes={}", out.len());
 
     Ok(())
 }
