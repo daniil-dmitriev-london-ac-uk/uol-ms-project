@@ -1,13 +1,15 @@
+use crate::io_access::SyncAccess;
 use crate::placement::Placement;
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io;
 use std::path::Path;
 
 pub struct Store<P: Placement> {
     data: File,
     index: File,
     place: P,
+    io: SyncAccess,
 }
 
 impl<P: Placement> Store<P> {
@@ -16,40 +18,46 @@ impl<P: Placement> Store<P> {
         let data = OpenOptions::new().create(true).read(true).write(true).open(dir.join("data.hs"))?;
         let index = OpenOptions::new().create(true).read(true).write(true).open(dir.join("index.hs"))?;
 
-        Ok(Store { data, index, place })
+        Ok(Store { data, index, place, io: SyncAccess::new() })
     }
 
     pub fn insert(&mut self, payload: &[u8]) -> io::Result<u64> {
         let (offset, id) = self.place.allocate(payload.len() as u64)?;
-        self.data.seek(SeekFrom::Start(offset))?;
-        self.data.write_all(&(payload.len() as u64).to_le_bytes())?;
-        self.data.write_all(&id.to_le_bytes())?;
-        self.data.write_all(payload)?;
+        let mut record = Vec::with_capacity(payload.len() + 16);
 
-        self.index.seek(SeekFrom::Start(id * 16))?;
-        self.index.write_all(&offset.to_le_bytes())?;
-        self.index.write_all(&(payload.len() as u64 + 16).to_le_bytes())?;
-        self.place.note_written(id, payload.len() as u64 + 16);
+        record.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+        record.extend_from_slice(&id.to_le_bytes());
+        record.extend_from_slice(payload);
+        self.io.write_at(&self.data, offset, &record)?;
+        let mut slot = [0u8; 16];
+        slot[..8].copy_from_slice(&offset.to_le_bytes());
+        slot[8..].copy_from_slice(&(record.len() as u64).to_le_bytes());
+        self.io.write_at(&self.index, id * 16, &slot)?;
+        self.place.note_written(id, record.len() as u64);
 
         Ok(id)
     }
 
     pub fn read(&mut self, id: u64, out: &mut Vec<u8>) -> io::Result<()> {
-        self.index.seek(SeekFrom::Start(id * 16))?;
         let mut slot = [0u8; 16];
-        self.index.read_exact(&mut slot)?;
+        self.io.read_at(&self.index, id * 16, &mut slot)?;
         let offset = u64::from_le_bytes(slot[..8].try_into().unwrap());
+        let total = u64::from_le_bytes(slot[8..].try_into().unwrap()) as usize;
+        let mut record = vec![0u8; total];
 
-        self.data.seek(SeekFrom::Start(offset))?;
-        let mut header = [0u8; 16];
-        self.data.read_exact(&mut header)?;
-        let len = u64::from_le_bytes(header[..8].try_into().unwrap()) as usize;
-        out.resize(len, 0);
-        self.data.read_exact(out)
+        self.io.read_at(&self.data, offset, &mut record)?;
+        out.clear();
+        out.extend_from_slice(&record[16..]);
+
+        Ok(())
     }
 
     pub fn flush(&mut self) -> io::Result<()> {
         self.data.sync_data()?;
         self.index.sync_data()
+    }
+
+    pub fn io_calls(&self) -> u64 {
+        self.io.counters.reads + self.io.counters.writes
     }
 }

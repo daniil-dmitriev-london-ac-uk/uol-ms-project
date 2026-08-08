@@ -1,6 +1,7 @@
 mod append;
 mod bucket;
 mod placement;
+mod io_access;
 mod store;
 
 use append::AppendPlacement;
@@ -25,7 +26,7 @@ fn main() -> io::Result<()> {
     append.read(append_id, &mut out)?;
     bucket.read(bucket_id, &mut out)?;
 
-    println!("generic_store_sample_bytes={}", out.len());
+    println!("generic_store_sample_bytes={} io_calls={}", out.len(), append.io_calls() + bucket.io_calls());
 
     Ok(())
 }
