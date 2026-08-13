@@ -1,31 +1,10 @@
 use crate::io_access::SyncAccess;
 use crate::placement::Placement;
-use crate::uring_access::UringAccess;
+use crate::io_mode::IoMode;
 
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::Path;
-
-pub enum IoMode {
-    Sync(SyncAccess),
-    Uring(UringAccess),
-}
-
-impl IoMode {
-    fn write_at(&mut self, file: &File, off: u64, data: &[u8]) -> io::Result<()> {
-        match self {
-            IoMode::Sync(io) => io.write_at(file, off, data),
-            IoMode::Uring(io) => io.write_at(file, off, data),
-        }
-    }
-
-    fn read_at(&mut self, file: &File, off: u64, data: &mut [u8]) -> io::Result<()> {
-        match self {
-            IoMode::Sync(io) => io.read_at(file, off, data),
-            IoMode::Uring(io) => io.read_at(file, off, data),
-        }
-    }
-}
 
 pub struct Store<P: Placement> {
     data: File,
