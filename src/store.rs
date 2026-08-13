@@ -1,25 +1,24 @@
-use crate::io_access::SyncAccess;
+use crate::block_io::BlockIo;
 use crate::placement::Placement;
-use crate::io_mode::IoMode;
 
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::Path;
 
-pub struct Store<P: Placement> {
+pub struct Store<I: BlockIo, P: Placement> {
+    io: I,
+    place: P,
     data: File,
     index: File,
-    place: P,
-    io: IoMode,
 }
 
-impl<P: Placement> Store<P> {
-    pub fn open(dir: &Path, place: P, io: IoMode) -> io::Result<Self> {
+impl<I: BlockIo, P: Placement> Store<I, P> {
+    pub fn open(dir: &Path, io: I, place: P) -> io::Result<Self> {
         std::fs::create_dir_all(dir)?;
         let data = OpenOptions::new().create(true).read(true).write(true).open(dir.join("data.hs"))?;
         let index = OpenOptions::new().create(true).read(true).write(true).open(dir.join("index.hs"))?;
 
-        Ok(Store { data, index, place, io })
+        Ok(Store { io, place, data, index })
     }
 
     pub fn insert(&mut self, payload: &[u8]) -> io::Result<u64> {
@@ -54,7 +53,7 @@ impl<P: Placement> Store<P> {
     }
 
     pub fn flush(&mut self) -> io::Result<()> {
-        self.data.sync_data()?;
-        self.index.sync_data()
+        self.io.sync(&self.data)?;
+        self.io.sync(&self.index)
     }
 }

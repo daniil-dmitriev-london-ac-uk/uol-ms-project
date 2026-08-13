@@ -1,46 +1,35 @@
 mod append;
+mod block_io;
 mod bucket;
-mod io_access;
-mod io_mode;
 mod placement;
 mod store;
-mod uring_access;
+mod uring_io;
 
 use append::AppendPlacement;
+use block_io::{BlockIo, SyncIo};
 use bucket::BucketPlacement;
-use io_access::SyncAccess;
-use io_mode::IoMode;
 use placement::Placement;
 use store::Store;
-use uring_access::UringAccess;
 
 use std::io;
 use std::path::Path;
-use std::time::Instant;
 
-fn run<P: Placement>(name: &str, place: P, io: IoMode) -> io::Result<()> {
-    let mut store = Store::open(Path::new(name), place, io)?;
+fn run<I: BlockIo, P: Placement>(name: &str, io: I, place: P) -> io::Result<()> {
+    let mut store = Store::open(Path::new(name), io, place)?;
 
-    let payload = vec![7u8; 4096];
-
-    let started = Instant::now();
-
-    for _ in 0..256 {
-        store.insert(&payload)?;
-    }
+    let id = store.insert(&vec![7u8; 4096])?;
 
     store.flush()?;
 
-    println!("case={name} elapsed_ms={}", started.elapsed().as_millis());
-
-    Ok(())
+    let mut out = Vec::new();
+    store.read(id, &mut out)
 }
 
 fn main() -> io::Result<()> {
-    run("sync-append", AppendPlacement::new(0, 0), IoMode::Sync(SyncAccess::new()))?;
-    run("sync-bucket", BucketPlacement::new(3), IoMode::Sync(SyncAccess::new()))?;
-    run("uring-append", AppendPlacement::new(0, 0), IoMode::Uring(UringAccess::new(32)?))?;
-    run("uring-bucket", BucketPlacement::new(3), IoMode::Uring(UringAccess::new(32)?))?;
+    run("sync-append", SyncIo, AppendPlacement::new(0, 0))?;
+    run("sync-bucket", SyncIo, BucketPlacement::new(3))?;
+    run("uring-append", uring_io::UringIo::new(32)?, AppendPlacement::new(0, 0))?;
+    run("uring-bucket", uring_io::UringIo::new(32)?, BucketPlacement::new(3))?;
 
     Ok(())
 }
