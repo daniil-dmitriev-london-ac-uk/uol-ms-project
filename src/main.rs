@@ -1,35 +1,36 @@
 mod append;
 mod block_io;
 mod bucket;
+mod heap;
 mod placement;
-mod store;
 mod uring_io;
 
 use append::AppendPlacement;
-use block_io::{BlockIo, SyncIo};
+use block_io::SyncIo;
 use bucket::BucketPlacement;
-use placement::Placement;
-use store::Store;
+use heap::Heap;
 
 use std::io;
 use std::path::Path;
 
-fn run<I: BlockIo, P: Placement>(name: &str, io: I, place: P) -> io::Result<()> {
-    let mut store = Store::open(Path::new(name), io, place)?;
+fn main() -> io::Result<()> {
+    let payload = vec![7u8; 4096];
 
-    let id = store.insert(&vec![7u8; 4096])?;
+    let mut sync_append = Heap::open(Path::new("sync-append"), SyncIo, AppendPlacement::new(0, 0))?;
+    let id = sync_append.insert(&payload)?;
 
-    store.flush()?;
+    sync_append.flush()?;
 
     let mut out = Vec::new();
-    store.read(id, &mut out)
-}
+    sync_append.read(id, &mut out)?;
 
-fn main() -> io::Result<()> {
-    run("sync-append", SyncIo, AppendPlacement::new(0, 0))?;
-    run("sync-bucket", SyncIo, BucketPlacement::new(3))?;
-    run("uring-append", uring_io::UringIo::new(32)?, AppendPlacement::new(0, 0))?;
-    run("uring-bucket", uring_io::UringIo::new(32)?, BucketPlacement::new(3))?;
+    let mut uring_bucket = Heap::open(Path::new("uring-bucket"), uring_io::UringIo::new(32)?, BucketPlacement::new(3))?;
+    let id = uring_bucket.insert(&payload)?;
+
+    uring_bucket.flush()?;
+    uring_bucket.read(id, &mut out)?;
+
+    println!("flexible_heap_sample_bytes={}", out.len());
 
     Ok(())
 }
