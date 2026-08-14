@@ -22,37 +22,58 @@ pub struct BucketPlacement {
 
 impl BucketPlacement {
     pub fn new(bucket: u64) -> Self {
-        BucketPlacement { bucket, extents: HashMap::new(), next_data: 0, regions: HashMap::new(), next_region: 0 }
+        BucketPlacement {
+            bucket,
+            extents: HashMap::new(),
+            next_data: 0,
+            regions: HashMap::new(),
+            next_region: 0,
+        }
     }
 }
 
 impl Placement for BucketPlacement {
     fn allocate(&mut self, payload_len: u64) -> io::Result<(u64, u64)> {
-        let total = payload_len + 24;
+        let record_len = payload_len + 24;
         let region = self.regions.entry(self.bucket).or_insert_with(|| {
             let start = self.next_region;
+
             self.next_region += REGION_SLOTS;
+
             (start, 0)
         });
 
         if region.1 >= REGION_SLOTS {
-            return Err(io::Error::new(io::ErrorKind::OutOfMemory, "slot region is full"));
+            return Err(io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                "slot region is full",
+            ));
         }
 
         let id = region.0 + region.1;
+
         region.1 += 1;
+
         let extents = self.extents.entry(self.bucket).or_default();
         let offset = match extents.last_mut() {
-            Some(extent) if extent.used + total <= extent.size => {
+            Some(extent) if extent.used + record_len <= extent.size => {
                 let offset = extent.start + extent.used;
-                extent.used += total;
+
+                extent.used += record_len;
+
                 offset
             }
             _ => {
-                let size = total.next_multiple_of(4096).max(EXTENT_BYTES);
+                let size = record_len.next_multiple_of(4096).max(EXTENT_BYTES);
                 let offset = self.next_data;
+
                 self.next_data += size;
-                extents.push(Extent { start: offset, size, used: total });
+                extents.push(Extent {
+                    start: offset,
+                    size,
+                    used: record_len,
+                });
+
                 offset
             }
         };
