@@ -13,7 +13,11 @@ use std::path::Path;
 
 fn main() -> std::io::Result<()> {
     let payload = vec![7u8; 4096];
-    let mut sync_append = Heap::open(Path::new("sync-append"), SyncIo, AppendPlacement::new(0, 0))?;
+    let mut sync_append = Heap::open(
+        Path::new("sync-append"),
+        SyncIo::new(),
+        AppendPlacement::new(0, 0),
+    )?;
     let id = sync_append.insert(&payload)?;
 
     sync_append.flush()?;
@@ -24,16 +28,24 @@ fn main() -> std::io::Result<()> {
 
     let mut uring_bucket = Heap::open(
         Path::new("uring-bucket"),
-        io::uring::UringIo::new(32)?,
+        io::uring::UringIo::new(io::uring::DEFAULT_DEPTH, io::uring::DEFAULT_CHUNK)?,
         BucketPlacement::new(3),
     )?;
     let id = uring_bucket.insert(&payload)?;
 
     uring_bucket.flush()?;
 
+    uring_bucket.reset_io_counters();
+
     uring_bucket.read(id, &mut out)?;
 
-    println!("flexible_heap_sample_bytes={}", out.len());
+    let counters = uring_bucket.io_counters();
+
+    println!(
+        "flexible_heap_sample_bytes={} reads={}",
+        out.len(),
+        counters.reads
+    );
 
     Ok(())
 }

@@ -1,43 +1,73 @@
-use super::BlockIo;
+use super::{BlockIo, IoCounters, ReadReq, WriteReq, sync_counted};
 
 use std::fs::File;
 use std::io;
 use std::os::unix::fs::FileExt;
 
-pub struct SyncIo;
+#[derive(Default)]
+pub struct SyncIo {
+    counters: IoCounters,
+}
+
+impl SyncIo {
+    pub fn new() -> Self {
+        SyncIo::default()
+    }
+}
 
 impl BlockIo for SyncIo {
-    fn read_at(&mut self, file: &File, mut off: u64, mut data: &mut [u8]) -> io::Result<()> {
-        while !data.is_empty() {
-            let processed_bytes = file.read_at(data, off)?;
+    fn read_vec(&mut self, file: &File, requests: &mut [ReadReq<'_>]) -> io::Result<()> {
+        for request in requests {
+            let mut done = 0usize;
 
-            if processed_bytes == 0 {
-                return Err(io::ErrorKind::UnexpectedEof.into());
+            while done < request.buf.len() {
+                let processed_bytes =
+                    file.read_at(&mut request.buf[done..], request.off + done as u64)?;
+
+                self.counters.reads += 1;
+                self.counters.read_bytes += processed_bytes as u64;
+
+                if processed_bytes == 0 {
+                    return Err(io::ErrorKind::UnexpectedEof.into());
+                }
+
+                done += processed_bytes;
             }
-
-            off += processed_bytes as u64;
-            data = &mut data[processed_bytes..];
         }
 
         Ok(())
     }
 
-    fn write_at(&mut self, file: &File, mut off: u64, mut data: &[u8]) -> io::Result<()> {
-        while !data.is_empty() {
-            let processed_bytes = file.write_at(data, off)?;
+    fn write_vec(&mut self, file: &File, requests: &[WriteReq<'_>]) -> io::Result<()> {
+        for request in requests {
+            let mut done = 0usize;
 
-            if processed_bytes == 0 {
-                return Err(io::ErrorKind::WriteZero.into());
+            while done < request.buf.len() {
+                let processed_bytes =
+                    file.write_at(&request.buf[done..], request.off + done as u64)?;
+
+                if processed_bytes == 0 {
+                    return Err(io::ErrorKind::WriteZero.into());
+                }
+
+                self.counters.writes += 1;
+                self.counters.write_bytes += processed_bytes as u64;
+                done += processed_bytes;
             }
-
-            off += processed_bytes as u64;
-            data = &data[processed_bytes..];
         }
 
         Ok(())
     }
 
     fn sync(&mut self, file: &File) -> io::Result<()> {
-        file.sync_data()
+        sync_counted(file, &mut self.counters)
+    }
+
+    fn counters(&self) -> IoCounters {
+        self.counters
+    }
+
+    fn reset_counters(&mut self) {
+        self.counters = IoCounters::default();
     }
 }

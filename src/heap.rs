@@ -1,4 +1,4 @@
-use crate::io::BlockIo;
+use crate::io::{BlockIo, ReadReq, WriteReq};
 use crate::placement::Placement;
 
 use std::fs::{File, OpenOptions};
@@ -43,14 +43,26 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         record.extend_from_slice(&id.to_le_bytes());
         record.extend_from_slice(payload);
 
-        self.io.write_at(&self.data, offset, &record)?;
+        self.io.write_vec(
+            &self.data,
+            &[WriteReq {
+                off: offset,
+                buf: &record,
+            }],
+        )?;
 
         let mut slot = [0u8; 16];
 
         slot[..8].copy_from_slice(&offset.to_le_bytes());
         slot[8..].copy_from_slice(&(record.len() as u64).to_le_bytes());
 
-        self.io.write_at(&self.index, id * 16, &slot)?;
+        self.io.write_vec(
+            &self.index,
+            &[WriteReq {
+                off: id * 16,
+                buf: &slot,
+            }],
+        )?;
 
         self.placement.note_written(id, record.len() as u64);
 
@@ -60,13 +72,25 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
     pub fn read(&mut self, id: u64, out: &mut Vec<u8>) -> io::Result<()> {
         let mut slot = [0u8; 16];
 
-        self.io.read_at(&self.index, id * 16, &mut slot)?;
+        self.io.read_vec(
+            &self.index,
+            &mut [ReadReq {
+                off: id * 16,
+                buf: &mut slot,
+            }],
+        )?;
 
         let offset = u64::from_le_bytes(slot[..8].try_into().unwrap());
         let total = u64::from_le_bytes(slot[8..].try_into().unwrap()) as usize;
         let mut record = vec![0u8; total];
 
-        self.io.read_at(&self.data, offset, &mut record)?;
+        self.io.read_vec(
+            &self.data,
+            &mut [ReadReq {
+                off: offset,
+                buf: &mut record,
+            }],
+        )?;
 
         out.clear();
         out.extend_from_slice(&record[16..]);
@@ -77,5 +101,13 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
     pub fn flush(&mut self) -> io::Result<()> {
         self.io.sync(&self.data)?;
         self.io.sync(&self.index)
+    }
+
+    pub fn io_counters(&self) -> crate::io::IoCounters {
+        self.io.counters()
+    }
+
+    pub fn reset_io_counters(&mut self) {
+        self.io.reset_counters();
     }
 }
