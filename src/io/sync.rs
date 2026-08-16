@@ -28,7 +28,8 @@ impl BlockIo for SyncIo {
                 self.counters.read_bytes += processed_bytes as u64;
 
                 if processed_bytes == 0 {
-                    return Err(io::ErrorKind::UnexpectedEof.into());
+                    request.buf[done..].fill(0);
+                    break;
                 }
 
                 done += processed_bytes;

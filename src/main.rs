@@ -1,5 +1,6 @@
 mod append;
 mod bucket;
+mod data;
 mod heap;
 mod io;
 mod placement;
@@ -42,9 +43,10 @@ fn main() -> std::io::Result<()> {
     let counters = uring_bucket.io_counters();
 
     println!(
-        "flexible_heap_sample_bytes={} reads={}",
+        "flexible_heap_sample_bytes={} reads={} pending={}",
         out.len(),
-        counters.reads
+        counters.reads,
+        uring_bucket.pending_bytes()
     );
 
     Ok(())

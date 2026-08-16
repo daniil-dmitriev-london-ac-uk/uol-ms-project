@@ -109,12 +109,13 @@ impl UringIo {
                     continue;
                 }
 
-                if completed_bytes == 0 {
-                    error = Some(if is_read {
-                        io::ErrorKind::UnexpectedEof.into()
-                    } else {
-                        io::ErrorKind::WriteZero.into()
-                    });
+                if is_read && completed_bytes == 0 {
+                    unsafe { std::ptr::write_bytes(segment.pointer, 0, segment.len) };
+                    continue;
+                }
+
+                if !is_read && completed_bytes == 0 {
+                    error = Some(io::ErrorKind::WriteZero.into());
                     continue;
                 }
 
