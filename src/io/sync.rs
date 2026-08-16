@@ -1,4 +1,4 @@
-use super::{BlockIo, IoCounters, ReadReq, WriteReq, sync_counted};
+use super::{BlockIo, IoCounters, ReadReq, WriteReq, fdatasync_counted};
 
 use std::fs::File;
 use std::io;
@@ -61,7 +61,7 @@ impl BlockIo for SyncIo {
     }
 
     fn sync(&mut self, file: &File) -> io::Result<()> {
-        sync_counted(file, &mut self.counters)
+        fdatasync_counted(file, &mut self.counters)
     }
 
     fn counters(&self) -> IoCounters {

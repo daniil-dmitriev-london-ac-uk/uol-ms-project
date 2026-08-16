@@ -1,4 +1,4 @@
-use super::{BlockIo, IoCounters, ReadReq, WriteReq, sync_counted};
+use super::{BlockIo, IoCounters, ReadReq, WriteReq, fdatasync_counted};
 
 use io_uring::{IoUring, opcode, types};
 
@@ -197,7 +197,7 @@ impl BlockIo for UringIo {
     }
 
     fn sync(&mut self, file: &File) -> io::Result<()> {
-        sync_counted(file, &mut self.counters)
+        fdatasync_counted(file, &mut self.counters)
     }
 
     fn counters(&self) -> IoCounters {

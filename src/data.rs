@@ -1,7 +1,7 @@
-use crate::io::{AlignedBuf, BlockIo, PAGE, ReadReq, WriteReq};
+use crate::io::{AlignedBuf, BlockIo, PAGE, ReadReq, WriteReq, fallocate, open_direct};
 
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io;
 use std::path::Path;
 
@@ -40,16 +40,14 @@ pub struct PagedFile {
     pool: Vec<AlignedBuf>,
     staged_writes: Vec<StagedWrite>,
     pending_bytes: usize,
+    allocated_end: u64,
 }
 
 impl PagedFile {
     pub fn create(path: &Path) -> io::Result<Self> {
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .read(true)
-            .write(true)
-            .open(path)?;
+        let file = open_direct(path, true)?;
+
+        file.set_len(0)?;
 
         Ok(PagedFile {
             file,
@@ -57,11 +55,13 @@ impl PagedFile {
             pool: Vec::new(),
             staged_writes: Vec::new(),
             pending_bytes: 0,
+            allocated_end: 0,
         })
     }
 
     pub fn open(path: &Path) -> io::Result<Self> {
-        let file = OpenOptions::new().read(true).write(true).open(path)?;
+        let file = open_direct(path, false)?;
+        let allocated_end = file.metadata()?.len();
 
         Ok(PagedFile {
             file,
@@ -69,7 +69,22 @@ impl PagedFile {
             pool: Vec::new(),
             staged_writes: Vec::new(),
             pending_bytes: 0,
+            allocated_end,
         })
+    }
+
+    pub fn ensure_alloc(&mut self, upto: u64, chunk: u64) -> io::Result<()> {
+        if upto <= self.allocated_end {
+            return Ok(());
+        }
+
+        let new_end = page_up(upto.max(self.allocated_end + chunk));
+
+        fallocate(&self.file, self.allocated_end, new_end - self.allocated_end)?;
+
+        self.allocated_end = new_end;
+
+        Ok(())
     }
 
     fn take_buffer(&mut self) -> AlignedBuf {

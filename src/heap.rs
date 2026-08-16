@@ -39,6 +39,11 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
 
     pub fn insert(&mut self, payload: &[u8]) -> io::Result<u64> {
         let (offset, id) = self.placement.allocate(payload.len() as u64)?;
+
+        self.data
+            .ensure_alloc(offset + payload.len() as u64 + 16, 64 << 20)?;
+        self.index.ensure_alloc(id * 16 + 16, 1 << 20)?;
+
         let mut header = [0u8; 16];
 
         header[..8].copy_from_slice(&(payload.len() as u64).to_le_bytes());
