@@ -1,3 +1,4 @@
+use crate::crc32::crc32c;
 use crate::data::PagedFile;
 use crate::io::BlockIo;
 use crate::placement::Placement;
@@ -41,22 +42,23 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         let (offset, id) = self.placement.allocate(payload.len() as u64)?;
 
         self.data
-            .ensure_alloc(offset + payload.len() as u64 + 16, 64 << 20)?;
+            .ensure_alloc(offset + payload.len() as u64 + 20, 64 << 20)?;
         self.index.ensure_alloc(id * 16 + 16, 1 << 20)?;
 
-        let mut header = [0u8; 16];
+        let mut header = [0u8; 20];
 
         header[..8].copy_from_slice(&(payload.len() as u64).to_le_bytes());
-        header[8..].copy_from_slice(&id.to_le_bytes());
+        header[8..16].copy_from_slice(&id.to_le_bytes());
+        header[16..20].copy_from_slice(&crc32c(payload).to_le_bytes());
         self.data.stage(&mut self.io, offset, &[&header, payload])?;
 
         let mut slot = [0u8; 16];
 
         slot[..8].copy_from_slice(&offset.to_le_bytes());
-        slot[8..].copy_from_slice(&(payload.len() as u64 + 16).to_le_bytes());
+        slot[8..].copy_from_slice(&(payload.len() as u64 + 20).to_le_bytes());
         self.index.stage(&mut self.io, id * 16, &[&slot])?;
 
-        self.placement.note_written(id, payload.len() as u64 + 16);
+        self.placement.note_written(id, payload.len() as u64 + 20);
 
         Ok(id)
     }
@@ -72,7 +74,18 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         let (record, at) = self.data.read_aligned(&mut self.io, offset, total)?;
 
         out.clear();
-        out.extend_from_slice(&record[at + 16..at + total as usize]);
+
+        let payload = &record[at + 20..at + total as usize];
+        let stored_crc = u32::from_le_bytes(record[at + 16..at + 20].try_into().unwrap());
+
+        if crc32c(payload) != stored_crc {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "payload checksum mismatch",
+            ));
+        }
+
+        out.extend_from_slice(payload);
 
         self.data.recycle(record);
 

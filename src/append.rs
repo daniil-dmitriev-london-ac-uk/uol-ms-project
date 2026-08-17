@@ -18,7 +18,7 @@ impl Placement for AppendPlacement {
         let offset = self.cursor;
         let id = self.next_id;
 
-        self.cursor += payload_len + 16;
+        self.cursor += payload_len + 20;
         self.next_id += 1;
 
         Ok((offset, id))

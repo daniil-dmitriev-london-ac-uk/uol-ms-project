@@ -1,5 +1,6 @@
 mod append;
 mod bucket;
+mod crc32;
 mod data;
 mod heap;
 mod io;

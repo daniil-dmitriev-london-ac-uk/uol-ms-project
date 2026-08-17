@@ -34,7 +34,7 @@ impl BucketPlacement {
 
 impl Placement for BucketPlacement {
     fn allocate(&mut self, payload_len: u64) -> io::Result<(u64, u64)> {
-        let record_len = payload_len + 24;
+        let record_len = payload_len + 20;
         let region = self.regions.entry(self.bucket).or_insert_with(|| {
             let start = self.next_region;
 
