@@ -1,5 +1,6 @@
 use crate::crc32::crc32c;
 use crate::data::PagedFile;
+use crate::format::{RecordHeader, SLOT_SIZE, Slot, header_len};
 use crate::io::BlockIo;
 use crate::placement::Placement;
 
@@ -14,20 +15,20 @@ pub struct Heap<I: BlockIo, P: Placement> {
 }
 
 impl<I: BlockIo, P: Placement> Heap<I, P> {
-    pub fn open(dir: &Path, io: I, placement: P) -> io::Result<Self> {
+    pub fn open(dir: &Path, mut io: I, placement: P) -> io::Result<Self> {
         std::fs::create_dir_all(dir)?;
 
         let data_path = dir.join("data.hs");
         let index_path = dir.join("index.hs");
         let data = if data_path.exists() {
-            PagedFile::open(&data_path)?
+            PagedFile::open(&data_path, b'D', P::LAYOUT, &mut io)?
         } else {
-            PagedFile::create(&data_path)?
+            PagedFile::create(&data_path, b'D', P::LAYOUT, &mut io)?
         };
         let index = if index_path.exists() {
-            PagedFile::open(&index_path)?
+            PagedFile::open(&index_path, b'I', P::LAYOUT, &mut io)?
         } else {
-            PagedFile::create(&index_path)?
+            PagedFile::create(&index_path, b'I', P::LAYOUT, &mut io)?
         };
 
         Ok(Heap {
@@ -40,51 +41,72 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
 
     pub fn insert(&mut self, payload: &[u8]) -> io::Result<u64> {
         let (offset, id) = self.placement.allocate(payload.len() as u64)?;
+        let total = header_len(P::WITH_BUCKET) as u64 + payload.len() as u64;
 
-        self.data
-            .ensure_alloc(offset + payload.len() as u64 + 20, 64 << 20)?;
-        self.index.ensure_alloc(id * 16 + 16, 1 << 20)?;
+        self.data.ensure_alloc(offset + total, 64 << 20)?;
+        self.index
+            .ensure_alloc(Slot::file_offset(id) + SLOT_SIZE as u64, 1 << 20)?;
 
-        let mut header = [0u8; 20];
+        let mut header = [0u8; 38];
 
-        header[..8].copy_from_slice(&(payload.len() as u64).to_le_bytes());
-        header[8..16].copy_from_slice(&id.to_le_bytes());
-        header[16..20].copy_from_slice(&crc32c(payload).to_le_bytes());
-        self.data.stage(&mut self.io, offset, &[&header, payload])?;
+        RecordHeader {
+            len: payload.len() as u64,
+            bucket: self.placement.bucket(),
+            id,
+            version: 1,
+            crc: crc32c(payload),
+        }
+        .encode(P::WITH_BUCKET, &mut header);
 
-        let mut slot = [0u8; 16];
+        let header = &header[..header_len(P::WITH_BUCKET)];
 
-        slot[..8].copy_from_slice(&offset.to_le_bytes());
-        slot[8..].copy_from_slice(&(payload.len() as u64 + 20).to_le_bytes());
-        self.index.stage(&mut self.io, id * 16, &[&slot])?;
+        self.data.stage(&mut self.io, offset, &[header, payload])?;
 
-        self.placement.note_written(id, payload.len() as u64 + 20);
+        let mut slot = [0u8; SLOT_SIZE];
+
+        Slot {
+            offset,
+            total_len: total,
+        }
+        .encode(&mut slot);
+        self.index
+            .stage(&mut self.io, Slot::file_offset(id), &[&slot])?;
+
+        self.placement.note_written(id, total);
 
         Ok(id)
     }
 
     pub fn read(&mut self, id: u64, out: &mut Vec<u8>) -> io::Result<()> {
-        let (slot_buf, at) = self.index.read_aligned(&mut self.io, id * 16, 16)?;
-        let slot = &slot_buf[at..at + 16];
-        let offset = u64::from_le_bytes(slot[..8].try_into().unwrap());
-        let total = u64::from_le_bytes(slot[8..].try_into().unwrap());
+        let (slot_buf, at) =
+            self.index
+                .read_aligned(&mut self.io, Slot::file_offset(id), SLOT_SIZE as u64)?;
+        let slot = Slot::decode(&slot_buf[at..at + SLOT_SIZE])
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "record is not indexed"))?;
 
         self.index.recycle(slot_buf);
 
-        let (record, at) = self.data.read_aligned(&mut self.io, offset, total)?;
+        let (record, at) = self
+            .data
+            .read_aligned(&mut self.io, slot.offset, slot.total_len)?;
+        let header_bytes = header_len(P::WITH_BUCKET);
+        let header = RecordHeader::decode(&record[at..at + header_bytes], P::WITH_BUCKET)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "record header checksum mismatch",
+                )
+            })?;
+        let payload = &record[at + header_bytes..at + slot.total_len as usize];
 
-        out.clear();
-
-        let payload = &record[at + 20..at + total as usize];
-        let stored_crc = u32::from_le_bytes(record[at + 16..at + 20].try_into().unwrap());
-
-        if crc32c(payload) != stored_crc {
+        if header.id != id || header.len != payload.len() as u64 || crc32c(payload) != header.crc {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "payload checksum mismatch",
             ));
         }
 
+        out.clear();
         out.extend_from_slice(payload);
 
         self.data.recycle(record);

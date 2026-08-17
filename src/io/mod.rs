@@ -1,14 +1,14 @@
 pub mod sync;
 pub mod uring;
 
+use crate::format::PAGE;
+
 use std::alloc::{Layout, alloc_zeroed, dealloc};
 use std::fs::File;
 use std::io;
 use std::ops::{Deref, DerefMut};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-
-pub const PAGE: usize = 4096;
 
 pub struct AlignedBuf {
     ptr: *mut u8,

@@ -2,6 +2,7 @@ mod append;
 mod bucket;
 mod crc32;
 mod data;
+mod format;
 mod heap;
 mod io;
 mod placement;
@@ -18,7 +19,7 @@ fn main() -> std::io::Result<()> {
     let mut sync_append = Heap::open(
         Path::new("sync-append"),
         SyncIo::new(),
-        AppendPlacement::new(0, 0),
+        AppendPlacement::new(format::PAGE_SIZE_U64, 0),
     )?;
     let id = sync_append.insert(&payload)?;
 

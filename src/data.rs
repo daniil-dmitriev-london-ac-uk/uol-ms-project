@@ -1,22 +1,14 @@
-use crate::io::{AlignedBuf, BlockIo, PAGE, ReadReq, WriteReq, fallocate, open_direct};
+use crate::format::{FileHeader, PAGE, PAGE_SIZE_U64, page_down, page_up};
+use crate::io::{AlignedBuf, BlockIo, ReadReq, WriteReq, fallocate, open_direct};
 
 use std::collections::HashMap;
 use std::fs::File;
 use std::io;
 use std::path::Path;
 
-const PAGE_SIZE_U64: u64 = PAGE as u64;
 const MAX_STAGED_WRITES: usize = 64;
 const MAX_POOLED_BUFFERS: usize = 16;
 const MAX_POOLED_BUFFER_CAPACITY: usize = 8 << 20;
-
-fn page_down(off: u64) -> u64 {
-    off & !(PAGE_SIZE_U64 - 1)
-}
-
-fn page_up(off: u64) -> u64 {
-    (off + PAGE_SIZE_U64 - 1) & !(PAGE_SIZE_U64 - 1)
-}
 
 struct StagedWrite {
     start: u64,
@@ -44,33 +36,59 @@ pub struct PagedFile {
 }
 
 impl PagedFile {
-    pub fn create(path: &Path) -> io::Result<Self> {
+    pub fn create(path: &Path, kind: u8, layout: u8, io: &mut impl BlockIo) -> io::Result<Self> {
         let file = open_direct(path, true)?;
 
         file.set_len(0)?;
 
-        Ok(PagedFile {
+        let mut paged_file = PagedFile {
             file,
             tail_pages: HashMap::new(),
             pool: Vec::new(),
             staged_writes: Vec::new(),
             pending_bytes: 0,
             allocated_end: 0,
-        })
+        };
+        let mut page = AlignedBuf::zeroed(PAGE);
+
+        FileHeader { kind, layout }.encode(&mut page);
+
+        io.write_vec(&paged_file.file, &[WriteReq { off: 0, buf: &page }])?;
+        io.sync(&paged_file.file)?;
+
+        paged_file.allocated_end = PAGE_SIZE_U64;
+
+        Ok(paged_file)
     }
 
-    pub fn open(path: &Path) -> io::Result<Self> {
+    pub fn open(path: &Path, kind: u8, layout: u8, io: &mut impl BlockIo) -> io::Result<Self> {
         let file = open_direct(path, false)?;
         let allocated_end = file.metadata()?.len();
-
-        Ok(PagedFile {
+        let paged_file = PagedFile {
             file,
             tail_pages: HashMap::new(),
             pool: Vec::new(),
             staged_writes: Vec::new(),
             pending_bytes: 0,
             allocated_end,
-        })
+        };
+        let mut page = AlignedBuf::zeroed(PAGE);
+
+        io.read_vec(
+            &paged_file.file,
+            &mut [ReadReq {
+                off: 0,
+                buf: &mut page,
+            }],
+        )?;
+
+        match FileHeader::decode(&page) {
+            Some(header) if header.kind == kind && header.layout == layout => Ok(paged_file),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid file header",
+            )),
+        }
     }
 
     pub fn ensure_alloc(&mut self, upto: u64, chunk: u64) -> io::Result<()> {

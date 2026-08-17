@@ -25,7 +25,7 @@ impl BucketPlacement {
         BucketPlacement {
             bucket,
             extents: HashMap::new(),
-            next_data: 0,
+            next_data: crate::format::PAGE_SIZE_U64,
             regions: HashMap::new(),
             next_region: 0,
         }
@@ -33,8 +33,11 @@ impl BucketPlacement {
 }
 
 impl Placement for BucketPlacement {
+    const WITH_BUCKET: bool = true;
+    const LAYOUT: u8 = crate::format::LAYOUT_BUCKET;
+
     fn allocate(&mut self, payload_len: u64) -> io::Result<(u64, u64)> {
-        let record_len = payload_len + 20;
+        let record_len = payload_len + crate::format::header_len(true) as u64;
         let region = self.regions.entry(self.bucket).or_insert_with(|| {
             let start = self.next_region;
 
@@ -82,4 +85,8 @@ impl Placement for BucketPlacement {
     }
 
     fn note_written(&mut self, _id: u64, _total_len: u64) {}
+
+    fn bucket(&self) -> u64 {
+        self.bucket
+    }
 }

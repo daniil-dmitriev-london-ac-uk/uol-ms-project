@@ -1,0 +1,144 @@
+use crate::crc32::crc32c;
+
+pub const PAGE: usize = 4096;
+pub const PAGE_SIZE_U64: u64 = PAGE as u64;
+pub const RECORD_MAGIC: u32 = 0x4452_4352;
+pub const LAYOUT_APPEND: u8 = 0;
+pub const LAYOUT_BUCKET: u8 = 1;
+pub const SLOT_SIZE: usize = 16;
+
+pub fn page_down(off: u64) -> u64 {
+    off & !(PAGE_SIZE_U64 - 1)
+}
+
+pub fn page_up(off: u64) -> u64 {
+    (off + PAGE_SIZE_U64 - 1) & !(PAGE_SIZE_U64 - 1)
+}
+
+pub struct FileHeader {
+    pub kind: u8,
+    pub layout: u8,
+}
+
+impl FileHeader {
+    pub fn encode(&self, page: &mut [u8]) {
+        page[..PAGE].fill(0);
+        page[..4].copy_from_slice(b"HSF1");
+        page[4] = self.kind;
+        page[5] = self.layout;
+
+        let crc = crc32c(&page[..8]);
+
+        page[8..12].copy_from_slice(&crc.to_le_bytes());
+    }
+
+    pub fn decode(page: &[u8]) -> Option<FileHeader> {
+        if &page[..4] != b"HSF1" {
+            return None;
+        }
+
+        let crc = u32::from_le_bytes(page[8..12].try_into().unwrap());
+
+        if crc != crc32c(&page[..8]) {
+            return None;
+        }
+
+        Some(FileHeader {
+            kind: page[4],
+            layout: page[5],
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RecordHeader {
+    pub len: u64,
+    pub bucket: u64,
+    pub id: u64,
+    pub version: u16,
+    pub crc: u32,
+}
+
+pub const fn header_len(with_bucket: bool) -> usize {
+    if with_bucket { 38 } else { 30 }
+}
+
+impl RecordHeader {
+    pub fn encode(&self, with_bucket: bool, out: &mut [u8]) {
+        out[..4].copy_from_slice(&RECORD_MAGIC.to_le_bytes());
+        out[4..12].copy_from_slice(&self.len.to_le_bytes());
+
+        let mut field_offset = 12;
+
+        if with_bucket {
+            out[12..20].copy_from_slice(&self.bucket.to_le_bytes());
+            field_offset = 20;
+        }
+        out[field_offset..field_offset + 8].copy_from_slice(&self.id.to_le_bytes());
+        out[field_offset + 8..field_offset + 10].copy_from_slice(&self.version.to_le_bytes());
+        out[field_offset + 10..field_offset + 14].copy_from_slice(&self.crc.to_le_bytes());
+
+        let header_crc = crc32c(&out[..field_offset + 14]);
+
+        out[field_offset + 14..field_offset + 18].copy_from_slice(&header_crc.to_le_bytes());
+    }
+
+    pub fn decode(buf: &[u8], with_bucket: bool) -> Option<RecordHeader> {
+        let len = header_len(with_bucket);
+
+        if buf.len() < len || u32::from_le_bytes(buf[..4].try_into().unwrap()) != RECORD_MAGIC {
+            return None;
+        }
+
+        let stored = u32::from_le_bytes(buf[len - 4..len].try_into().unwrap());
+
+        if stored != crc32c(&buf[..len - 4]) {
+            return None;
+        }
+
+        let payload_len = u64::from_le_bytes(buf[4..12].try_into().unwrap());
+        let (bucket, field_offset) = if with_bucket {
+            (u64::from_le_bytes(buf[12..20].try_into().unwrap()), 20)
+        } else {
+            (0, 12)
+        };
+
+        Some(RecordHeader {
+            len: payload_len,
+            bucket,
+            id: u64::from_le_bytes(buf[field_offset..field_offset + 8].try_into().unwrap()),
+            version: u16::from_le_bytes(
+                buf[field_offset + 8..field_offset + 10].try_into().unwrap(),
+            ),
+            crc: u32::from_le_bytes(
+                buf[field_offset + 10..field_offset + 14]
+                    .try_into()
+                    .unwrap(),
+            ),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Slot {
+    pub offset: u64,
+    pub total_len: u64,
+}
+
+impl Slot {
+    pub fn encode(&self, out: &mut [u8]) {
+        out[..8].copy_from_slice(&self.offset.to_le_bytes());
+        out[8..16].copy_from_slice(&self.total_len.to_le_bytes());
+    }
+
+    pub fn decode(buf: &[u8]) -> Option<Slot> {
+        let offset = u64::from_le_bytes(buf[..8].try_into().unwrap());
+        let total_len = u64::from_le_bytes(buf[8..16].try_into().unwrap());
+
+        (offset != 0).then_some(Slot { offset, total_len })
+    }
+
+    pub fn file_offset(id: u64) -> u64 {
+        PAGE_SIZE_U64 + id * SLOT_SIZE as u64
+    }
+}
