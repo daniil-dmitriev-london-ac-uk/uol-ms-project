@@ -4,6 +4,7 @@ mod crc32;
 mod data;
 mod format;
 mod heap;
+mod index;
 mod io;
 mod placement;
 
