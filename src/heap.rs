@@ -1,6 +1,5 @@
-use crate::crc32::crc32c;
-use crate::data::PagedFile;
-use crate::format::{RecordHeader, SLOT_SIZE, Slot, header_len};
+use crate::data::{DataFile, PagedFile};
+use crate::format::{SLOT_SIZE, Slot};
 use crate::index::IndexFile;
 use crate::io::BlockIo;
 use crate::placement::Placement;
@@ -11,7 +10,7 @@ use std::path::Path;
 pub struct Heap<I: BlockIo, P: Placement> {
     io: I,
     placement: P,
-    data: PagedFile,
+    data: DataFile,
     index: IndexFile,
 }
 
@@ -21,10 +20,15 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
 
         let data_path = dir.join("data.hs");
         let index_path = dir.join("index.hs");
-        let data = if data_path.exists() {
+        let data_paged_file = if data_path.exists() {
             PagedFile::open(&data_path, b'D', P::LAYOUT, &mut io)?
         } else {
             PagedFile::create(&data_path, b'D', P::LAYOUT, &mut io)?
+        };
+        let data = DataFile {
+            paged_file: data_paged_file,
+            with_bucket: P::WITH_BUCKET,
+            integrity: true,
         };
         let index_paged_file = if index_path.exists() {
             PagedFile::open(&index_path, b'I', P::LAYOUT, &mut io)?
@@ -45,27 +49,24 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
 
     pub fn insert(&mut self, payload: &[u8]) -> io::Result<u64> {
         let (offset, id) = self.placement.allocate(payload.len() as u64)?;
-        let total = header_len(P::WITH_BUCKET) as u64 + payload.len() as u64;
+        let total = self.data.record_header_len() + payload.len() as u64;
 
-        self.data.ensure_alloc(offset + total, 64 << 20)?;
+        self.data
+            .paged_file
+            .ensure_alloc(offset + total, 64 << 20)?;
         self.index
             .paged_file
             .ensure_alloc(Slot::file_offset(id) + SLOT_SIZE as u64, 1 << 20)?;
 
-        let mut header = [0u8; 38];
-
-        RecordHeader {
-            len: payload.len() as u64,
-            bucket: self.placement.bucket(),
+        self.data.stage_record(
+            &mut self.io,
+            offset,
+            self.placement.bucket(),
             id,
-            version: 1,
-            crc: crc32c(payload),
-        }
-        .encode(P::WITH_BUCKET, &mut header);
+            1,
+            payload,
+        )?;
 
-        let header = &header[..header_len(P::WITH_BUCKET)];
-
-        self.data.stage(&mut self.io, offset, &[header, payload])?;
         self.index.stage_slot(
             &mut self.io,
             id,
@@ -85,37 +86,16 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
             .index
             .read_slot(&mut self.io, id)?
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "record is not indexed"))?;
-        let (record, at) = self
-            .data
-            .read_aligned(&mut self.io, slot.offset, slot.total_len)?;
-        let header_bytes = header_len(P::WITH_BUCKET);
-        let header = RecordHeader::decode(&record[at..at + header_bytes], P::WITH_BUCKET)
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "record header checksum mismatch",
-                )
-            })?;
-        let payload = &record[at + header_bytes..at + slot.total_len as usize];
 
-        if header.id != id || header.len != payload.len() as u64 || crc32c(payload) != header.crc {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "payload checksum mismatch",
-            ));
-        }
-
-        out.clear();
-        out.extend_from_slice(payload);
-
-        self.data.recycle(record);
+        self.data
+            .read_record(&mut self.io, slot.offset, slot.total_len, id, out)?;
 
         Ok(())
     }
 
     pub fn flush(&mut self) -> io::Result<()> {
-        self.data.flush(&mut self.io)?;
-        self.io.sync(&self.data.file)?;
+        self.data.paged_file.flush(&mut self.io)?;
+        self.io.sync(&self.data.paged_file.file)?;
 
         self.index.paged_file.flush(&mut self.io)?;
         self.io.sync(&self.index.paged_file.file)
@@ -130,6 +110,6 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
     }
 
     pub fn pending_bytes(&self) -> usize {
-        self.data.pending_bytes() + self.index.paged_file.pending_bytes()
+        self.data.paged_file.pending_bytes() + self.index.paged_file.pending_bytes()
     }
 }

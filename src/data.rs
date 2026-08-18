@@ -1,4 +1,6 @@
+use crate::crc32::crc32c;
 use crate::format::{FileHeader, PAGE, PAGE_SIZE_U64, page_down, page_up};
+use crate::format::{RecordHeader, header_len};
 use crate::io::{AlignedBuf, BlockIo, ReadReq, WriteReq, fallocate, open_direct};
 
 use std::collections::HashMap;
@@ -14,6 +16,87 @@ struct StagedWrite {
     start: u64,
     buffer: AlignedBuf,
     head: Option<Vec<u8>>,
+}
+
+pub struct DataFile {
+    pub paged_file: PagedFile,
+    pub with_bucket: bool,
+    pub integrity: bool,
+}
+
+impl DataFile {
+    pub fn record_header_len(&self) -> u64 {
+        header_len(self.with_bucket) as u64
+    }
+
+    pub fn stage_record(
+        &mut self,
+        io: &mut impl BlockIo,
+        off: u64,
+        bucket: u64,
+        id: u64,
+        version: u16,
+        payload: &[u8],
+    ) -> io::Result<()> {
+        let crc = if self.integrity { crc32c(payload) } else { 0 };
+        let header = RecordHeader {
+            len: payload.len() as u64,
+            bucket,
+            id,
+            version,
+            crc,
+        };
+        let mut buf = [0u8; 38];
+        let len = header_len(self.with_bucket);
+
+        header.encode(self.with_bucket, &mut buf[..len]);
+        self.paged_file.stage(io, off, &[&buf[..len], payload])
+    }
+
+    pub fn read_record(
+        &mut self,
+        io: &mut impl BlockIo,
+        off: u64,
+        total_len: u64,
+        expect_id: u64,
+        out: &mut Vec<u8>,
+    ) -> io::Result<RecordHeader> {
+        let (buf, at) = self.paged_file.read_aligned(io, off, total_len)?;
+        let header_len = header_len(self.with_bucket);
+        let header = RecordHeader::decode(&buf[at..], self.with_bucket).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "record header checksum mismatch",
+            )
+        })?;
+
+        if header.id != expect_id || header.len + header_len as u64 != total_len {
+            self.paged_file.recycle(buf);
+
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "record identity mismatch",
+            ));
+        }
+
+        let payload = &buf[at + header_len..at + total_len as usize];
+
+        if self.integrity && crc32c(payload) != header.crc {
+            self.paged_file.recycle(buf);
+
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "payload checksum mismatch",
+            ));
+        }
+
+        out.clear();
+        out.extend_from_slice(payload);
+
+        self.paged_file.recycle(buf);
+
+        Ok(header)
+    }
 }
 
 impl StagedWrite {
