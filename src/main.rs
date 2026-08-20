@@ -10,17 +10,17 @@ mod placement;
 
 use append::AppendPlacement;
 use bucket::BucketPlacement;
-use heap::Heap;
+use heap::{Heap, HeapConfig};
 use io::sync::SyncIo;
 
 use std::path::Path;
 
 fn main() -> std::io::Result<()> {
     let payload = vec![7u8; 4096];
-    let mut sync_append = Heap::open(
+    let mut sync_append = Heap::<SyncIo, AppendPlacement>::open(
         Path::new("sync-append"),
         SyncIo::new(),
-        AppendPlacement::new(format::PAGE_SIZE_U64, 0),
+        HeapConfig::default(),
     )?;
     let id = sync_append.insert(&payload)?;
 
@@ -30,12 +30,12 @@ fn main() -> std::io::Result<()> {
 
     sync_append.read(id, &mut out)?;
 
-    let mut uring_bucket = Heap::open(
+    let mut uring_bucket = Heap::<io::uring::UringIo, BucketPlacement>::open(
         Path::new("uring-bucket"),
         io::uring::UringIo::new(io::uring::DEFAULT_DEPTH, io::uring::DEFAULT_CHUNK)?,
-        BucketPlacement::new(3),
+        HeapConfig::default(),
     )?;
-    let id = uring_bucket.insert(&payload)?;
+    let id = uring_bucket.insert_into(3, &payload)?;
 
     uring_bucket.flush()?;
 
@@ -51,6 +51,7 @@ fn main() -> std::io::Result<()> {
         counters.reads,
         uring_bucket.pending_bytes()
     );
+    println!("used_bytes={}", uring_bucket.used_bytes());
 
     Ok(())
 }

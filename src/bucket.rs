@@ -1,10 +1,12 @@
+use crate::data::DataFile;
+use crate::format::{PAGE_SIZE_U64, SLOT_SIZE, Slot, page_up};
+use crate::heap::HeapConfig;
+use crate::index::IndexFile;
+use crate::io::BlockIo;
 use crate::placement::Placement;
 
 use std::collections::HashMap;
 use std::io;
-
-const EXTENT_BYTES: u64 = 1 << 20;
-const REGION_SLOTS: u64 = 4096;
 
 struct Extent {
     start: u64,
@@ -12,23 +14,59 @@ struct Extent {
     used: u64,
 }
 
+struct BucketState {
+    extents: Vec<Extent>,
+    region_start: u64,
+    region_used: u64,
+}
+
 pub struct BucketPlacement {
-    bucket: u64,
-    extents: HashMap<u64, Vec<Extent>>,
+    buckets: HashMap<u64, BucketState>,
     next_data: u64,
-    regions: HashMap<u64, (u64, u64)>,
     next_region: u64,
 }
 
+fn extent_size(config: &HeapConfig, total_len: u64) -> u64 {
+    page_up(total_len.max(config.min_extent))
+}
+
 impl BucketPlacement {
-    pub fn new(bucket: u64) -> Self {
-        BucketPlacement {
-            bucket,
-            extents: HashMap::new(),
-            next_data: crate::format::PAGE_SIZE_U64,
-            regions: HashMap::new(),
-            next_region: 0,
+    fn place_bytes(
+        &mut self,
+        config: &HeapConfig,
+        data: &mut DataFile,
+        bucket: u64,
+        total_len: u64,
+    ) -> io::Result<u64> {
+        let state = self.buckets.entry(bucket).or_insert(BucketState {
+            extents: Vec::new(),
+            region_start: 0,
+            region_used: config.region_slots,
+        });
+
+        if let Some(extent) = state.extents.last_mut() {
+            if extent.used + total_len <= extent.size {
+                let offset = extent.start + extent.used;
+
+                extent.used += total_len;
+
+                return Ok(offset);
+            }
         }
+
+        let size = extent_size(config, total_len);
+        let start = self.next_data;
+
+        self.next_data += size;
+        data.paged_file
+            .ensure_alloc(self.next_data, config.growth)?;
+        state.extents.push(Extent {
+            start,
+            size,
+            used: total_len,
+        });
+
+        Ok(start)
     }
 }
 
@@ -36,57 +74,103 @@ impl Placement for BucketPlacement {
     const WITH_BUCKET: bool = true;
     const LAYOUT: u8 = crate::format::LAYOUT_BUCKET;
 
-    fn allocate(&mut self, payload_len: u64) -> io::Result<(u64, u64)> {
-        let record_len = payload_len + crate::format::header_len(true) as u64;
-        let region = self.regions.entry(self.bucket).or_insert_with(|| {
-            let start = self.next_region;
+    fn open(
+        io: &mut impl BlockIo,
+        config: &HeapConfig,
+        data: &mut DataFile,
+        index: &mut IndexFile,
+        created: bool,
+    ) -> io::Result<Self> {
+        if created {
+            data.paged_file
+                .ensure_alloc(config.initial_size, config.growth)?;
 
-            self.next_region += REGION_SLOTS;
-
-            (start, 0)
-        });
-
-        if region.1 >= REGION_SLOTS {
-            return Err(io::Error::new(
-                io::ErrorKind::OutOfMemory,
-                "slot region is full",
-            ));
+            return Ok(BucketPlacement {
+                buckets: HashMap::new(),
+                next_data: PAGE_SIZE_U64,
+                next_region: 0,
+            });
         }
 
-        let id = region.0 + region.1;
-
-        region.1 += 1;
-
-        let extents = self.extents.entry(self.bucket).or_default();
-        let offset = match extents.last_mut() {
-            Some(extent) if extent.used + record_len <= extent.size => {
-                let offset = extent.start + extent.used;
-
-                extent.used += record_len;
-
-                offset
-            }
-            _ => {
-                let size = record_len.next_multiple_of(4096).max(EXTENT_BYTES);
-                let offset = self.next_data;
-
-                self.next_data += size;
-                extents.push(Extent {
-                    start: offset,
-                    size,
-                    used: record_len,
-                });
-
-                offset
-            }
+        let size = index.paged_file.size()?;
+        let mut placement = BucketPlacement {
+            buckets: HashMap::new(),
+            next_data: PAGE_SIZE_U64,
+            next_region: 0,
         };
+        let mut id = 0u64;
+
+        while Slot::file_offset(id) + SLOT_SIZE as u64 <= size {
+            if let Some(slot) = index.read_slot(io, id)? {
+                let header = data.read_header(io, slot.offset, id)?;
+                let region_start = id - id % config.region_slots;
+                let used = id - region_start + 1;
+                let state = placement
+                    .buckets
+                    .entry(header.bucket)
+                    .or_insert(BucketState {
+                        extents: Vec::new(),
+                        region_start,
+                        region_used: used,
+                    });
+
+                if region_start >= state.region_start {
+                    state.region_start = region_start;
+                    state.region_used = state.region_used.max(used);
+                }
+                placement.next_region = placement
+                    .next_region
+                    .max(region_start + config.region_slots);
+                placement.next_data = placement.next_data.max(slot.offset + slot.total_len);
+            }
+
+            id += 1;
+        }
+
+        data.paged_file.note_alloc(data.paged_file.size()?);
+
+        Ok(placement)
+    }
+
+    fn alloc(
+        &mut self,
+        config: &HeapConfig,
+        data: &mut DataFile,
+        bucket: u64,
+        total_len: u64,
+    ) -> io::Result<(u64, u64)> {
+        let needs_region = self
+            .buckets
+            .get(&bucket)
+            .map(|state| state.region_used >= config.region_slots)
+            .unwrap_or(true);
+
+        if needs_region {
+            let start = self.next_region;
+
+            self.next_region += config.region_slots;
+
+            let state = self.buckets.entry(bucket).or_insert(BucketState {
+                extents: Vec::new(),
+                region_start: start,
+                region_used: 0,
+            });
+
+            state.region_start = start;
+            state.region_used = 0;
+        }
+
+        let state = self.buckets.get_mut(&bucket).unwrap();
+        let id = state.region_start + state.region_used;
+
+        state.region_used += 1;
+
+        let offset = self.place_bytes(config, data, bucket, total_len)?;
 
         Ok((offset, id))
     }
 
-    fn note_written(&mut self, _id: u64, _total_len: u64) {}
-
-    fn bucket(&self) -> u64 {
-        self.bucket
+    fn used_bytes(&self) -> u64 {
+        self.next_data - PAGE_SIZE_U64
     }
 }

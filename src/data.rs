@@ -97,6 +97,36 @@ impl DataFile {
 
         Ok(header)
     }
+
+    pub fn read_header(
+        &mut self,
+        io: &mut impl BlockIo,
+        off: u64,
+        expect_id: u64,
+    ) -> io::Result<RecordHeader> {
+        let (buf, at) = self
+            .paged_file
+            .read_aligned(io, off, self.record_header_len())?;
+        let header = RecordHeader::decode(&buf[at..], self.with_bucket);
+
+        self.paged_file.recycle(buf);
+
+        let header = header.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "record header checksum mismatch",
+            )
+        })?;
+
+        if header.id != expect_id {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "record identity mismatch",
+            ));
+        }
+
+        Ok(header)
+    }
 }
 
 impl StagedWrite {
@@ -186,6 +216,14 @@ impl PagedFile {
         self.allocated_end = new_end;
 
         Ok(())
+    }
+
+    pub fn size(&self) -> io::Result<u64> {
+        Ok(self.file.metadata()?.len())
+    }
+
+    pub fn note_alloc(&mut self, upto: u64) {
+        self.allocated_end = self.allocated_end.max(upto);
     }
 
     fn take_buffer(&mut self) -> AlignedBuf {

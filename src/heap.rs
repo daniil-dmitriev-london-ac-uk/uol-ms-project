@@ -7,76 +7,96 @@ use crate::placement::Placement;
 use std::io;
 use std::path::Path;
 
+#[derive(Debug, Clone)]
+pub struct HeapConfig {
+    pub integrity: bool,
+    pub initial_size: u64,
+    pub growth: u64,
+    pub min_extent: u64,
+    pub region_slots: u64,
+}
+
+impl Default for HeapConfig {
+    fn default() -> Self {
+        HeapConfig {
+            integrity: true,
+            initial_size: 64 << 20,
+            growth: 64 << 20,
+            min_extent: 1 << 20,
+            region_slots: 4096,
+        }
+    }
+}
+
 pub struct Heap<I: BlockIo, P: Placement> {
     io: I,
     placement: P,
     data: DataFile,
     index: IndexFile,
+    config: HeapConfig,
 }
 
 impl<I: BlockIo, P: Placement> Heap<I, P> {
-    pub fn open(dir: &Path, mut io: I, placement: P) -> io::Result<Self> {
+    pub fn open(dir: &Path, mut io: I, config: HeapConfig) -> io::Result<Self> {
         std::fs::create_dir_all(dir)?;
 
         let data_path = dir.join("data.hs");
         let index_path = dir.join("index.hs");
-        let data_paged_file = if data_path.exists() {
-            PagedFile::open(&data_path, b'D', P::LAYOUT, &mut io)?
-        } else {
+        let created = !data_path.exists();
+        let data_paged_file = if created {
             PagedFile::create(&data_path, b'D', P::LAYOUT, &mut io)?
+        } else {
+            PagedFile::open(&data_path, b'D', P::LAYOUT, &mut io)?
         };
-        let data = DataFile {
+        let index_paged_file = if created {
+            PagedFile::create(&index_path, b'I', P::LAYOUT, &mut io)?
+        } else {
+            PagedFile::open(&index_path, b'I', P::LAYOUT, &mut io)?
+        };
+        let mut data = DataFile {
             paged_file: data_paged_file,
             with_bucket: P::WITH_BUCKET,
-            integrity: true,
+            integrity: config.integrity,
         };
-        let index_paged_file = if index_path.exists() {
-            PagedFile::open(&index_path, b'I', P::LAYOUT, &mut io)?
-        } else {
-            PagedFile::create(&index_path, b'I', P::LAYOUT, &mut io)?
-        };
-        let index = IndexFile {
+        let mut index = IndexFile {
             paged_file: index_paged_file,
         };
+        let placement = P::open(&mut io, &config, &mut data, &mut index, created)?;
 
         Ok(Heap {
             io,
             placement,
             data,
             index,
+            config,
         })
     }
 
     pub fn insert(&mut self, payload: &[u8]) -> io::Result<u64> {
-        let (offset, id) = self.placement.allocate(payload.len() as u64)?;
-        let total = self.data.record_header_len() + payload.len() as u64;
+        self.insert_into(0, payload)
+    }
 
-        self.data
-            .paged_file
-            .ensure_alloc(offset + total, 64 << 20)?;
+    pub fn insert_into(&mut self, bucket: u64, payload: &[u8]) -> io::Result<u64> {
+        let total = self.data.record_header_len() + payload.len() as u64;
+        let (off, id) = self
+            .placement
+            .alloc(&self.config, &mut self.data, bucket, total)?;
+
         self.index
             .paged_file
             .ensure_alloc(Slot::file_offset(id) + SLOT_SIZE as u64, 1 << 20)?;
 
-        self.data.stage_record(
-            &mut self.io,
-            offset,
-            self.placement.bucket(),
-            id,
-            1,
-            payload,
-        )?;
+        self.data
+            .stage_record(&mut self.io, off, bucket, id, 1, payload)?;
 
         self.index.stage_slot(
             &mut self.io,
             id,
             Slot {
-                offset,
+                offset: off,
                 total_len: total,
             },
         )?;
-
-        self.placement.note_written(id, total);
 
         Ok(id)
     }
@@ -111,5 +131,9 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
 
     pub fn pending_bytes(&self) -> usize {
         self.data.paged_file.pending_bytes() + self.index.paged_file.pending_bytes()
+    }
+
+    pub fn used_bytes(&self) -> u64 {
+        self.placement.used_bytes()
     }
 }
