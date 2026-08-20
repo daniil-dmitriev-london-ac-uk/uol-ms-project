@@ -33,6 +33,7 @@ pub struct Heap<I: BlockIo, P: Placement> {
     placement: P,
     data: DataFile,
     index: IndexFile,
+    registry: Option<PagedFile>,
     config: HeapConfig,
 }
 
@@ -53,6 +54,16 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         } else {
             PagedFile::open(&index_path, b'I', P::LAYOUT, &mut io)?
         };
+        let registry_path = dir.join("registry.hs");
+        let registry = if P::WITH_BUCKET {
+            Some(if created {
+                PagedFile::create(&registry_path, b'R', P::LAYOUT, &mut io)?
+            } else {
+                PagedFile::open(&registry_path, b'R', P::LAYOUT, &mut io)?
+            })
+        } else {
+            None
+        };
         let mut data = DataFile {
             paged_file: data_paged_file,
             with_bucket: P::WITH_BUCKET,
@@ -61,13 +72,22 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         let mut index = IndexFile {
             paged_file: index_paged_file,
         };
-        let placement = P::open(&mut io, &config, &mut data, &mut index, created)?;
+        let mut registry = registry;
+        let placement = P::open(
+            &mut io,
+            &config,
+            &mut data,
+            &mut index,
+            registry.as_mut(),
+            created,
+        )?;
 
         Ok(Heap {
             io,
             placement,
             data,
             index,
+            registry,
             config,
         })
     }
@@ -78,9 +98,14 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
 
     pub fn insert_into(&mut self, bucket: u64, payload: &[u8]) -> io::Result<u64> {
         let total = self.data.record_header_len() + payload.len() as u64;
-        let (off, id) = self
-            .placement
-            .alloc(&self.config, &mut self.data, bucket, total)?;
+        let (off, id) = self.placement.alloc(
+            &mut self.io,
+            &self.config,
+            &mut self.data,
+            self.registry.as_mut(),
+            bucket,
+            total,
+        )?;
 
         self.index
             .paged_file
@@ -114,6 +139,11 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
     }
 
     pub fn flush(&mut self) -> io::Result<()> {
+        if let Some(registry) = &mut self.registry {
+            registry.flush(&mut self.io)?;
+            self.io.sync(&registry.file)?;
+        }
+
         self.data.paged_file.flush(&mut self.io)?;
         self.io.sync(&self.data.paged_file.file)?;
 
@@ -130,7 +160,13 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
     }
 
     pub fn pending_bytes(&self) -> usize {
-        self.data.paged_file.pending_bytes() + self.index.paged_file.pending_bytes()
+        self.data.paged_file.pending_bytes()
+            + self.index.paged_file.pending_bytes()
+            + self
+                .registry
+                .as_ref()
+                .map(PagedFile::pending_bytes)
+                .unwrap_or(0)
     }
 
     pub fn used_bytes(&self) -> u64 {

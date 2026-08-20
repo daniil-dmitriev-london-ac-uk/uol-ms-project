@@ -1,4 +1,4 @@
-use crate::data::DataFile;
+use crate::data::{DataFile, PagedFile};
 use crate::format::{PAGE_SIZE_U64, SLOT_SIZE, Slot};
 use crate::heap::HeapConfig;
 use crate::index::IndexFile;
@@ -21,6 +21,7 @@ impl Placement for AppendPlacement {
         config: &HeapConfig,
         data: &mut DataFile,
         index: &mut IndexFile,
+        _registry: Option<&mut PagedFile>,
         created: bool,
     ) -> io::Result<Self> {
         if created {
@@ -64,8 +65,10 @@ impl Placement for AppendPlacement {
 
     fn alloc(
         &mut self,
+        _io: &mut impl BlockIo,
         config: &HeapConfig,
         data: &mut DataFile,
+        _registry: Option<&mut PagedFile>,
         _bucket: u64,
         total_len: u64,
     ) -> io::Result<(u64, u64)> {

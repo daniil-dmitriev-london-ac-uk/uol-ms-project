@@ -3,9 +3,11 @@ use crate::crc32::crc32c;
 pub const PAGE: usize = 4096;
 pub const PAGE_SIZE_U64: u64 = PAGE as u64;
 pub const RECORD_MAGIC: u32 = 0x4452_4352;
+pub const REGISTRY_MAGIC: u32 = 0x5847_4552;
 pub const LAYOUT_APPEND: u8 = 0;
 pub const LAYOUT_BUCKET: u8 = 1;
 pub const SLOT_SIZE: usize = 16;
+pub const REGISTRY_ROW_SIZE: usize = 64;
 
 pub fn page_down(off: u64) -> u64 {
     off & !(PAGE_SIZE_U64 - 1)
@@ -140,5 +142,45 @@ impl Slot {
 
     pub fn file_offset(id: u64) -> u64 {
         PAGE_SIZE_U64 + id * SLOT_SIZE as u64
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RegistryRow {
+    pub kind: u8,
+    pub bucket: u64,
+    pub start: u64,
+    pub size: u64,
+}
+
+impl RegistryRow {
+    pub fn encode(&self, out: &mut [u8]) {
+        out[..REGISTRY_ROW_SIZE].fill(0);
+        out[..4].copy_from_slice(&REGISTRY_MAGIC.to_le_bytes());
+        out[4] = self.kind;
+        out[8..16].copy_from_slice(&self.bucket.to_le_bytes());
+        out[16..24].copy_from_slice(&self.start.to_le_bytes());
+        out[24..32].copy_from_slice(&self.size.to_le_bytes());
+
+        let crc = crc32c(&out[..32]);
+
+        out[32..36].copy_from_slice(&crc.to_le_bytes());
+    }
+
+    pub fn decode(buf: &[u8]) -> Option<RegistryRow> {
+        if u32::from_le_bytes(buf[..4].try_into().unwrap()) != REGISTRY_MAGIC {
+            return None;
+        }
+
+        if u32::from_le_bytes(buf[32..36].try_into().unwrap()) != crc32c(&buf[..32]) {
+            return None;
+        }
+
+        Some(RegistryRow {
+            kind: buf[4],
+            bucket: u64::from_le_bytes(buf[8..16].try_into().unwrap()),
+            start: u64::from_le_bytes(buf[16..24].try_into().unwrap()),
+            size: u64::from_le_bytes(buf[24..32].try_into().unwrap()),
+        })
     }
 }
