@@ -138,6 +138,20 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         Ok(())
     }
 
+    pub fn read_batch(&mut self, ids: &[u64], out: &mut Vec<Vec<u8>>) -> io::Result<()> {
+        let slots = self.index.read_slots(&mut self.io, ids)?;
+        let mut items = Vec::with_capacity(ids.len());
+
+        for (&id, slot) in ids.iter().zip(slots) {
+            let slot = slot
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "record is not indexed"))?;
+
+            items.push((slot.offset, slot.total_len, id));
+        }
+
+        self.data.read_many(&mut self.io, &items, out)
+    }
+
     pub fn flush(&mut self) -> io::Result<()> {
         if let Some(registry) = &mut self.registry {
             registry.flush(&mut self.io)?;

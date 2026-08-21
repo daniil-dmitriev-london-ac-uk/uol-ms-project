@@ -1,6 +1,6 @@
 use crate::data::PagedFile;
-use crate::format::{SLOT_SIZE, Slot};
-use crate::io::BlockIo;
+use crate::format::{PAGE_SIZE_U64, SLOT_SIZE, Slot, page_down};
+use crate::io::{AlignedBuf, BlockIo, ReadReq};
 
 use std::io;
 
@@ -25,5 +25,66 @@ impl IndexFile {
         self.paged_file.recycle(buffer);
 
         Ok(slot)
+    }
+
+    pub fn read_slots(
+        &mut self,
+        io: &mut impl BlockIo,
+        ids: &[u64],
+    ) -> io::Result<Vec<Option<Slot>>> {
+        self.paged_file.flush(io)?;
+
+        let mut pages: Vec<u64> = ids
+            .iter()
+            .map(|&id| page_down(Slot::file_offset(id)))
+            .collect();
+
+        pages.sort_unstable();
+        pages.dedup();
+
+        let mut groups: Vec<(u64, u64)> = Vec::new();
+
+        for &page in &pages {
+            match groups.last_mut() {
+                Some(group) if page == group.1 => group.1 += PAGE_SIZE_U64,
+                _ => groups.push((page, page + PAGE_SIZE_U64)),
+            }
+        }
+
+        let mut buffers: Vec<AlignedBuf> = groups
+            .iter()
+            .map(|group| self.paged_file.take_sized((group.1 - group.0) as usize))
+            .collect();
+
+        {
+            let mut requests: Vec<ReadReq<'_>> = groups
+                .iter()
+                .zip(buffers.iter_mut())
+                .map(|(group, buffer)| ReadReq {
+                    off: group.0,
+                    buf: buffer,
+                })
+                .collect();
+
+            io.read_vec(&self.paged_file.file, &mut requests)?;
+        }
+
+        let mut slots = Vec::with_capacity(ids.len());
+
+        for &id in ids {
+            let slot_offset = Slot::file_offset(id);
+            let group_index = groups.partition_point(|group| group.1 <= slot_offset);
+            let buffer_offset = (slot_offset - groups[group_index].0) as usize;
+
+            slots.push(Slot::decode(
+                &buffers[group_index][buffer_offset..buffer_offset + SLOT_SIZE],
+            ));
+        }
+
+        for buffer in buffers {
+            self.paged_file.recycle(buffer);
+        }
+
+        Ok(slots)
     }
 }

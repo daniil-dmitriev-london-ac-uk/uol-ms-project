@@ -41,7 +41,11 @@ fn main() -> std::io::Result<()> {
 
     uring_bucket.reset_io_counters();
 
-    uring_bucket.read(id, &mut out)?;
+    let mut batch = Vec::new();
+
+    uring_bucket.read_batch(&[id], &mut batch)?;
+
+    out = batch.pop().unwrap();
 
     let counters = uring_bucket.io_counters();
 

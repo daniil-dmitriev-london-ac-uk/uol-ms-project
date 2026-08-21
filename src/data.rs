@@ -53,6 +53,46 @@ impl DataFile {
         self.paged_file.stage(io, off, &[&buf[..len], payload])
     }
 
+    fn parse(
+        &self,
+        buffer: &[u8],
+        buffer_offset: usize,
+        total_len: u64,
+        expect_id: u64,
+        offset: u64,
+        out: &mut Vec<u8>,
+    ) -> io::Result<RecordHeader> {
+        let header_len = header_len(self.with_bucket);
+        let header =
+            RecordHeader::decode(&buffer[buffer_offset..], self.with_bucket).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "record header checksum mismatch",
+                )
+            })?;
+
+        if header.id != expect_id || header.len + header_len as u64 != total_len {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "record identity mismatch",
+            ));
+        }
+
+        let payload = &buffer[buffer_offset + header_len..buffer_offset + total_len as usize];
+
+        if self.integrity && crc32c(payload) != header.crc {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("payload checksum mismatch at {offset}"),
+            ));
+        }
+
+        out.clear();
+        out.extend_from_slice(payload);
+
+        Ok(header)
+    }
+
     pub fn read_record(
         &mut self,
         io: &mut impl BlockIo,
@@ -61,41 +101,12 @@ impl DataFile {
         expect_id: u64,
         out: &mut Vec<u8>,
     ) -> io::Result<RecordHeader> {
-        let (buf, at) = self.paged_file.read_aligned(io, off, total_len)?;
-        let header_len = header_len(self.with_bucket);
-        let header = RecordHeader::decode(&buf[at..], self.with_bucket).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "record header checksum mismatch",
-            )
-        })?;
+        let (buffer, buffer_offset) = self.paged_file.read_aligned(io, off, total_len)?;
+        let result = self.parse(&buffer, buffer_offset, total_len, expect_id, off, out);
 
-        if header.id != expect_id || header.len + header_len as u64 != total_len {
-            self.paged_file.recycle(buf);
+        self.paged_file.recycle(buffer);
 
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "record identity mismatch",
-            ));
-        }
-
-        let payload = &buf[at + header_len..at + total_len as usize];
-
-        if self.integrity && crc32c(payload) != header.crc {
-            self.paged_file.recycle(buf);
-
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "payload checksum mismatch",
-            ));
-        }
-
-        out.clear();
-        out.extend_from_slice(payload);
-
-        self.paged_file.recycle(buf);
-
-        Ok(header)
+        result
     }
 
     pub fn read_header(
@@ -104,12 +115,12 @@ impl DataFile {
         off: u64,
         expect_id: u64,
     ) -> io::Result<RecordHeader> {
-        let (buf, at) = self
-            .paged_file
-            .read_aligned(io, off, self.record_header_len())?;
-        let header = RecordHeader::decode(&buf[at..], self.with_bucket);
+        let (buffer, buffer_offset) =
+            self.paged_file
+                .read_aligned(io, off, self.record_header_len())?;
+        let header = RecordHeader::decode(&buffer[buffer_offset..], self.with_bucket);
 
-        self.paged_file.recycle(buf);
+        self.paged_file.recycle(buffer);
 
         let header = header.ok_or_else(|| {
             io::Error::new(
@@ -126,6 +137,76 @@ impl DataFile {
         }
 
         Ok(header)
+    }
+
+    pub fn read_many(
+        &mut self,
+        io: &mut impl BlockIo,
+        items: &[(u64, u64, u64)],
+        out: &mut Vec<Vec<u8>>,
+    ) -> io::Result<()> {
+        self.paged_file.flush(io)?;
+
+        let mut order: Vec<usize> = (0..items.len()).collect();
+
+        order.sort_by_key(|&item_index| items[item_index].0);
+
+        let mut groups: Vec<(u64, u64, Vec<usize>)> = Vec::new();
+
+        for &item_index in &order {
+            let (offset, length, _) = items[item_index];
+            let (group_start, group_end) = (page_down(offset), page_up(offset + length));
+
+            match groups.last_mut() {
+                Some(group) if group_start <= group.1 => {
+                    group.1 = group.1.max(group_end);
+                    group.2.push(item_index);
+                }
+                _ => groups.push((group_start, group_end, vec![item_index])),
+            }
+        }
+
+        let mut buffers: Vec<AlignedBuf> = groups
+            .iter()
+            .map(|group| self.paged_file.take_sized((group.1 - group.0) as usize))
+            .collect();
+
+        {
+            let mut requests: Vec<ReadReq<'_>> = groups
+                .iter()
+                .zip(buffers.iter_mut())
+                .map(|(group, buffer)| ReadReq {
+                    off: group.0,
+                    buf: buffer,
+                })
+                .collect();
+
+            io.read_vec(&self.paged_file.file, &mut requests)?;
+        }
+
+        out.clear();
+        out.resize(items.len(), Vec::new());
+
+        for (group, buffer) in groups.iter().zip(&buffers) {
+            for &item_index in &group.2 {
+                let (offset, length, id) = items[item_index];
+
+                self.parse(
+                    buffer,
+                    (offset - group.0) as usize,
+                    length,
+                    id,
+                    offset,
+                    &mut out[item_index],
+                )?;
+            }
+        }
+
+        for buffer in buffers {
+            self.paged_file.recycle(buffer);
+        }
+
+        Ok(())
     }
 }
 
@@ -230,6 +311,14 @@ impl PagedFile {
         let mut buf = self.pool.pop().unwrap_or_else(|| AlignedBuf::zeroed(0));
 
         buf.clear();
+
+        buf
+    }
+
+    pub fn take_sized(&mut self, len: usize) -> AlignedBuf {
+        let mut buf = self.take_buffer();
+
+        buf.resize_zeroed(len);
 
         buf
     }
