@@ -1,17 +1,5 @@
-mod append;
-mod bucket;
-mod crc32;
-mod data;
-mod format;
-mod heap;
-mod index;
-mod io;
-mod placement;
-
-use append::AppendPlacement;
-use bucket::BucketPlacement;
-use heap::{Heap, HeapConfig, SyncPolicy};
-use io::sync::SyncIo;
+use heapstore::io;
+use heapstore::{AppendPlacement, BucketPlacement, Heap, HeapConfig, SyncIo, SyncPolicy};
 
 use std::path::Path;
 

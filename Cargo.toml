@@ -2,6 +2,7 @@
 name = "heapstore"
 version = "0.1.0"
 edition = "2024"
+description = "Table heap storage layer"
 
 [dependencies]
 libc = "0.2"
