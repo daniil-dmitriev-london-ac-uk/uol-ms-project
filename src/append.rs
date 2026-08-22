@@ -85,6 +85,24 @@ impl Placement for AppendPlacement {
         Ok((offset, id))
     }
 
+    fn alloc_update(
+        &mut self,
+        _io: &mut impl BlockIo,
+        config: &HeapConfig,
+        data: &mut DataFile,
+        _registry: Option<&mut PagedFile>,
+        _bucket: u64,
+        total_len: u64,
+    ) -> io::Result<u64> {
+        let offset = self.cursor;
+
+        data.paged_file
+            .ensure_alloc(offset + total_len, config.growth)?;
+        self.cursor += total_len;
+
+        Ok(offset)
+    }
+
     fn used_bytes(&self) -> u64 {
         self.cursor - PAGE_SIZE_U64
     }

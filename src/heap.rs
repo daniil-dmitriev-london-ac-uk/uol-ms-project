@@ -152,6 +152,50 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         self.data.read_many(&mut self.io, &items, out)
     }
 
+    pub fn update(&mut self, id: u64, payload: &[u8]) -> io::Result<()> {
+        let slot = self
+            .index
+            .read_slot(&mut self.io, id)?
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "record is not indexed"))?;
+        let old = self.data.read_header(&mut self.io, slot.offset, id)?;
+        let total = self.data.record_header_len() + payload.len() as u64;
+        let off = self.placement.alloc_update(
+            &mut self.io,
+            &self.config,
+            &mut self.data,
+            self.registry.as_mut(),
+            old.bucket,
+            total,
+        )?;
+
+        self.data.stage_record(
+            &mut self.io,
+            off,
+            old.bucket,
+            id,
+            old.version.wrapping_add(1),
+            payload,
+        )?;
+
+        self.index.stage_slot(
+            &mut self.io,
+            id,
+            Slot {
+                offset: off,
+                total_len: total,
+            },
+        )
+    }
+
+    pub fn delete(&mut self, id: u64) -> io::Result<()> {
+        let old = self
+            .index
+            .read_slot(&mut self.io, id)?
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "record is not indexed"))?;
+
+        self.index.stage_tombstone(&mut self.io, id, old)
+    }
+
     pub fn flush(&mut self) -> io::Result<()> {
         if let Some(registry) = &mut self.registry {
             registry.flush(&mut self.io)?;

@@ -28,5 +28,15 @@ pub trait Placement: Sized {
         total_len: u64,
     ) -> io::Result<(u64, u64)>;
 
+    fn alloc_update(
+        &mut self,
+        io: &mut impl BlockIo,
+        config: &HeapConfig,
+        data: &mut DataFile,
+        registry: Option<&mut PagedFile>,
+        bucket: u64,
+        total_len: u64,
+    ) -> io::Result<u64>;
+
     fn used_bytes(&self) -> u64;
 }

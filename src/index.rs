@@ -1,5 +1,5 @@
 use crate::data::PagedFile;
-use crate::format::{PAGE_SIZE_U64, SLOT_SIZE, Slot, page_down};
+use crate::format::{PAGE_SIZE_U64, SLOT_SIZE, Slot, TOMBSTONE_BIT, page_down};
 use crate::io::{AlignedBuf, BlockIo, ReadReq};
 
 use std::io;
@@ -13,6 +13,22 @@ impl IndexFile {
         let mut buffer = [0u8; SLOT_SIZE];
 
         slot.encode(&mut buffer);
+        self.paged_file.stage(io, Slot::file_offset(id), &[&buffer])
+    }
+
+    pub fn stage_tombstone(
+        &mut self,
+        io: &mut impl BlockIo,
+        id: u64,
+        old_slot: Slot,
+    ) -> io::Result<()> {
+        let mut buffer = [0u8; SLOT_SIZE];
+
+        Slot {
+            offset: old_slot.offset | TOMBSTONE_BIT,
+            total_len: old_slot.total_len,
+        }
+        .encode(&mut buffer);
         self.paged_file.stage(io, Slot::file_offset(id), &[&buffer])
     }
 

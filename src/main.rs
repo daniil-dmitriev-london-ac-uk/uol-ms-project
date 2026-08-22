@@ -24,6 +24,12 @@ fn main() -> std::io::Result<()> {
     )?;
     let id = sync_append.insert(&payload)?;
 
+    sync_append.update(id, &payload)?;
+
+    let removed = sync_append.insert(&payload)?;
+
+    sync_append.delete(removed)?;
+
     sync_append.flush()?;
 
     let mut out = Vec::new();

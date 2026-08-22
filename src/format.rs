@@ -2,10 +2,13 @@ use crate::crc32::crc32c;
 
 pub const PAGE: usize = 4096;
 pub const PAGE_SIZE_U64: u64 = PAGE as u64;
+
 pub const RECORD_MAGIC: u32 = 0x4452_4352;
 pub const REGISTRY_MAGIC: u32 = 0x5847_4552;
+
 pub const LAYOUT_APPEND: u8 = 0;
 pub const LAYOUT_BUCKET: u8 = 1;
+
 pub const SLOT_SIZE: usize = 16;
 pub const REGISTRY_ROW_SIZE: usize = 64;
 
@@ -86,19 +89,21 @@ impl RecordHeader {
     }
 
     pub fn decode(buf: &[u8], with_bucket: bool) -> Option<RecordHeader> {
-        let len = header_len(with_bucket);
+        let header_size = header_len(with_bucket);
 
-        if buf.len() < len || u32::from_le_bytes(buf[..4].try_into().unwrap()) != RECORD_MAGIC {
+        if buf.len() < header_size
+            || u32::from_le_bytes(buf[..4].try_into().unwrap()) != RECORD_MAGIC
+        {
             return None;
         }
 
-        let stored = u32::from_le_bytes(buf[len - 4..len].try_into().unwrap());
+        let stored = u32::from_le_bytes(buf[header_size - 4..header_size].try_into().unwrap());
 
-        if stored != crc32c(&buf[..len - 4]) {
+        if stored != crc32c(&buf[..header_size - 4]) {
             return None;
         }
 
-        let payload_len = u64::from_le_bytes(buf[4..12].try_into().unwrap());
+        let len = u64::from_le_bytes(buf[4..12].try_into().unwrap());
         let (bucket, field_offset) = if with_bucket {
             (u64::from_le_bytes(buf[12..20].try_into().unwrap()), 20)
         } else {
@@ -106,7 +111,7 @@ impl RecordHeader {
         };
 
         Some(RecordHeader {
-            len: payload_len,
+            len,
             bucket,
             id: u64::from_le_bytes(buf[field_offset..field_offset + 8].try_into().unwrap()),
             version: u16::from_le_bytes(
@@ -127,6 +132,16 @@ pub struct Slot {
     pub total_len: u64,
 }
 
+pub const TOMBSTONE_BIT: u64 = 1 << 63;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SlotState {
+    Empty,
+
+    Deleted(Slot),
+    Live(Slot),
+}
+
 impl Slot {
     pub fn encode(&self, out: &mut [u8]) {
         out[..8].copy_from_slice(&self.offset.to_le_bytes());
@@ -134,10 +149,26 @@ impl Slot {
     }
 
     pub fn decode(buf: &[u8]) -> Option<Slot> {
+        match Slot::state(buf) {
+            SlotState::Live(slot) => Some(slot),
+            _ => None,
+        }
+    }
+
+    pub fn state(buf: &[u8]) -> SlotState {
         let offset = u64::from_le_bytes(buf[..8].try_into().unwrap());
         let total_len = u64::from_le_bytes(buf[8..16].try_into().unwrap());
 
-        (offset != 0).then_some(Slot { offset, total_len })
+        if offset == 0 {
+            SlotState::Empty
+        } else if offset & TOMBSTONE_BIT != 0 {
+            SlotState::Deleted(Slot {
+                offset: offset & !TOMBSTONE_BIT,
+                total_len,
+            })
+        } else {
+            SlotState::Live(Slot { offset, total_len })
+        }
     }
 
     pub fn file_offset(id: u64) -> u64 {

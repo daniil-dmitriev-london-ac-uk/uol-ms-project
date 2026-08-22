@@ -409,6 +409,28 @@ impl Placement for BucketPlacement {
         Ok((offset, id))
     }
 
+    fn alloc_update(
+        &mut self,
+        io: &mut impl BlockIo,
+        config: &HeapConfig,
+        data: &mut DataFile,
+        registry: Option<&mut PagedFile>,
+        bucket: u64,
+        total_len: u64,
+    ) -> io::Result<u64> {
+        let registry = registry.expect("bucket layout requires registry");
+        let bucket_index = self.bucket_index(
+            io,
+            config,
+            data,
+            registry,
+            bucket,
+            required_extent_size(config, total_len),
+        )?;
+
+        self.place_bytes(io, config, data, registry, bucket_index, total_len)
+    }
+
     fn used_bytes(&self) -> u64 {
         self.states
             .iter()
