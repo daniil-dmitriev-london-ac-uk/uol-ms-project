@@ -10,7 +10,7 @@ mod placement;
 
 use append::AppendPlacement;
 use bucket::BucketPlacement;
-use heap::{Heap, HeapConfig};
+use heap::{Heap, HeapConfig, SyncPolicy};
 use io::sync::SyncIo;
 
 use std::path::Path;
@@ -20,7 +20,10 @@ fn main() -> std::io::Result<()> {
     let mut sync_append = Heap::<SyncIo, AppendPlacement>::open(
         Path::new("sync-append"),
         SyncIo::new(),
-        HeapConfig::default(),
+        HeapConfig {
+            sync_policy: SyncPolicy::EveryN(2),
+            ..HeapConfig::default()
+        },
     )?;
     let id = sync_append.insert(&payload)?;
 

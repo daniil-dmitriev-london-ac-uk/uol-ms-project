@@ -333,6 +333,10 @@ impl PagedFile {
         self.pending_bytes
     }
 
+    pub fn has_pending(&self) -> bool {
+        !self.staged_writes.is_empty()
+    }
+
     pub fn stage(&mut self, io: &mut impl BlockIo, off: u64, parts: &[&[u8]]) -> io::Result<()> {
         let len: usize = parts.iter().map(|part| part.len()).sum();
 

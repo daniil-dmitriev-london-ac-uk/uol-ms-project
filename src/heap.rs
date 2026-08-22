@@ -7,23 +7,33 @@ use crate::placement::Placement;
 use std::io;
 use std::path::Path;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SyncPolicy {
+    None,
+    EveryN(u32),
+}
+
 #[derive(Debug, Clone)]
 pub struct HeapConfig {
+    pub sync_policy: SyncPolicy,
     pub integrity: bool,
     pub initial_size: u64,
     pub growth: u64,
     pub min_extent: u64,
     pub region_slots: u64,
+    pub pending_limit: usize,
 }
 
 impl Default for HeapConfig {
     fn default() -> Self {
         HeapConfig {
+            sync_policy: SyncPolicy::None,
             integrity: true,
             initial_size: 64 << 20,
             growth: 64 << 20,
             min_extent: 1 << 20,
             region_slots: 4096,
+            pending_limit: 8 << 20,
         }
     }
 }
@@ -35,6 +45,7 @@ pub struct Heap<I: BlockIo, P: Placement> {
     index: IndexFile,
     registry: Option<PagedFile>,
     config: HeapConfig,
+    operations_since_sync: u32,
 }
 
 impl<I: BlockIo, P: Placement> Heap<I, P> {
@@ -89,6 +100,7 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
             index,
             registry,
             config,
+            operations_since_sync: 0,
         })
     }
 
@@ -122,6 +134,8 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
                 total_len: total,
             },
         )?;
+
+        self.after_write()?;
 
         Ok(id)
     }
@@ -184,7 +198,9 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
                 offset: off,
                 total_len: total,
             },
-        )
+        )?;
+
+        self.after_write()
     }
 
     pub fn delete(&mut self, id: u64) -> io::Result<()> {
@@ -193,20 +209,46 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
             .read_slot(&mut self.io, id)?
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "record is not indexed"))?;
 
-        self.index.stage_tombstone(&mut self.io, id, old)
+        self.index.stage_tombstone(&mut self.io, id, old)?;
+
+        self.after_write()
     }
 
     pub fn flush(&mut self) -> io::Result<()> {
+        self.commit()?;
+
+        self.index.paged_file.flush(&mut self.io)?;
+        self.io.sync(&self.index.paged_file.file)
+    }
+
+    fn commit(&mut self) -> io::Result<()> {
         if let Some(registry) = &mut self.registry {
-            registry.flush(&mut self.io)?;
-            self.io.sync(&registry.file)?;
+            if registry.has_pending() {
+                registry.flush(&mut self.io)?;
+                self.io.sync(&registry.file)?;
+            }
         }
 
         self.data.paged_file.flush(&mut self.io)?;
         self.io.sync(&self.data.paged_file.file)?;
 
-        self.index.paged_file.flush(&mut self.io)?;
-        self.io.sync(&self.index.paged_file.file)
+        self.index.paged_file.flush(&mut self.io)
+    }
+
+    fn after_write(&mut self) -> io::Result<()> {
+        self.operations_since_sync = self.operations_since_sync.wrapping_add(1);
+
+        if let SyncPolicy::EveryN(sync_interval) = self.config.sync_policy {
+            if sync_interval > 0 && self.operations_since_sync.is_multiple_of(sync_interval) {
+                return self.commit();
+            }
+        }
+
+        if self.pending_bytes() > self.config.pending_limit {
+            self.commit()?;
+        }
+
+        Ok(())
     }
 
     pub fn io_counters(&self) -> crate::io::IoCounters {
@@ -229,5 +271,11 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
 
     pub fn used_bytes(&self) -> u64 {
         self.placement.used_bytes()
+    }
+}
+
+impl<I: BlockIo, P: Placement> Drop for Heap<I, P> {
+    fn drop(&mut self) {
+        let _ = self.flush();
     }
 }
