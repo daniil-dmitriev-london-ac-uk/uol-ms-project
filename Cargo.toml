@@ -2,7 +2,11 @@
 name = "heapstore"
 version = "0.1.0"
 edition = "2024"
-description = "Table heap storage layer"
+description = "Table heap storage layer for NVMe (UOL Project)"
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
 
 [dependencies]
 libc = "0.2"
