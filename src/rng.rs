@@ -19,17 +19,12 @@ pub trait RandomSource {
 
             remainder.copy_from_slice(&last[..remainder.len()]);
         }
-
-
     }
-
 }
-
 
 pub struct SplitMix64(pub u64);
 
 impl SplitMix64 {
-    
     pub fn new(seed: u64) -> Self {
         SplitMix64(seed)
     }
@@ -45,10 +40,7 @@ impl SplitMix64 {
     pub fn fill(&mut self, buf: &mut [u8]) {
         RandomSource::fill(self, buf)
     }
-
 }
-
-
 
 impl RandomSource for SplitMix64 {
     fn next_u64(&mut self) -> u64 {
@@ -58,17 +50,13 @@ impl RandomSource for SplitMix64 {
 
         value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+
         value ^ (value >> 31)
     }
 }
 
-
-
 pub fn payload_for(seed: u64, key: u64, len: usize, out: &mut Vec<u8>) {
     out.clear();
     out.resize(len, 0);
-
     SplitMix64::new(seed ^ key.wrapping_mul(0xA076_1D64_78BD_642F)).fill(out);
 }
-
-

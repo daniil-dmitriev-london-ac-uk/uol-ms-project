@@ -1,42 +1,71 @@
 use super::*;
 
-
 pub(super) fn read_tests(args: &Args, csv: &mut Csv) {
-    for (layout, size, size_name) in ["append", "bucket"].iter().flat_map(|layout| SIZES.iter().map(move |&(size, name)| (*layout, size, name))) {
+    for (layout, size, size_name) in ["append", "bucket"]
+        .iter()
+        .flat_map(|layout| SIZES.iter().map(move |&(size, name)| (*layout, size, name)))
+    {
         let classes: [(&str, u64, u64, Vec<u64>); 2] = [
-            ("small", (POPULATION_BUDGET / (size + 64)).min(1024), if size >= 7 << 20 { 8 } else { 16 }, vec![1, 10, 32]),
-            ("large", (LARGE_POPULATION_BUDGET / (size + 64)).min(2000), 2, vec![1000]),
+            (
+                "small",
+                (POPULATION_BUDGET / (size + 64)).min(1024),
+                if size >= 7 << 20 { 8 } else { 16 },
+                vec![1, 10, 32],
+            ),
+            (
+                "large",
+                (LARGE_POPULATION_BUDGET / (size + 64)).min(2000),
+                2,
+                vec![1000],
+            ),
         ];
 
         for (_, population, buckets, widths) in classes {
-            if population < *widths.iter().max().unwrap() { continue; }
+            if population < *widths.iter().max().unwrap() {
+                continue;
+            }
 
             let selected = widths.iter().any(|width| {
                 ["sync", "uring"].iter().any(|io| {
                     ["arbitrary", "grouped"].iter().any(|pattern| {
-                        format!("{layout},{io},read,{pattern},{width},{size_name}").contains(&args.filter)
+                        format!("{layout},{io},read,{pattern},{width},{size_name}")
+                            .contains(&args.filter)
                     })
                 })
-
             });
 
-
-            if !selected { continue; }
+            if !selected {
+                continue;
+            }
 
             let dir = args.data.join("bench-data").join("read-store");
             let ids = populate(layout, &dir, size, population, buckets);
 
             for io in ["sync", "uring"] {
-                let mut heap = BenchmarkHeap::open(layout, io, &dir, config_for(size * population, SyncPolicy::None));
+                let mut heap = BenchmarkHeap::open(
+                    layout,
+                    io,
+                    &dir,
+                    config_for(size * population, SyncPolicy::None),
+                );
 
                 for &width in &widths {
-                    let patterns: &[&str] = if width == 1 { &["arbitrary"] } else { &["arbitrary", "grouped"] };
+                    let patterns: &[&str] = if width == 1 {
+                        &["arbitrary"]
+                    } else {
+                        &["arbitrary", "grouped"]
+                    };
 
                     for pattern in patterns {
                         let tag = [layout, io, "read", pattern, &width.to_string(), size_name];
 
-                        if !tag.join(",").contains(&args.filter) { continue; }
-                        if *pattern == "grouped" && population / buckets < width { continue; }
+                        if !tag.join(",").contains(&args.filter) {
+                            continue;
+                        }
+
+                        if *pattern == "grouped" && population / buckets < width {
+                            continue;
+                        }
 
                         let mut repetition_results = Vec::new();
 
@@ -55,17 +84,18 @@ pub(super) fn read_tests(args: &Args, csv: &mut Csv) {
                                     let start = rng.below(population / buckets - width + 1);
 
                                     for (index, selected) in picked.iter_mut().enumerate() {
-                                        *selected = ids[((start + index as u64) * buckets + bucket) as usize];
+                                        *selected = ids
+                                            [((start + index as u64) * buckets + bucket) as usize];
                                     }
-
                                 } else {
                                     for index in 0..width as usize {
-                                        let random = index as u64 + rng.below(population - index as u64);
+                                        let random =
+                                            index as u64 + rng.below(population - index as u64);
 
                                         pool.swap(index, random as usize);
+
                                         picked[index] = ids[pool[index] as usize];
                                     }
-
                                 }
 
                                 let started = Instant::now();
@@ -84,6 +114,7 @@ pub(super) fn read_tests(args: &Args, csv: &mut Csv) {
                                 io_counters: heap.counters(),
                             });
                         }
+
                         summary_row(csv, &tag, &repetition_results, width, width * size);
                     }
                 }
@@ -92,12 +123,4 @@ pub(super) fn read_tests(args: &Args, csv: &mut Csv) {
             let _ = std::fs::remove_dir_all(&dir);
         }
     }
-
-
-
 }
-
-
-
-
-
