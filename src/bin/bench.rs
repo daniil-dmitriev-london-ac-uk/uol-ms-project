@@ -20,9 +20,7 @@ const SIZES: &[(u64, &str)] = &[
 ];
 
 const POPULATION_BUDGET: u64 = 1_900_000_000;
-
 const LARGE_POPULATION_BUDGET: u64 = 2_100_000_000;
-
 const WRITE_BUDGET: u64 = 2_100_000_000;
 
 enum BenchmarkHeap {
@@ -274,5 +272,4 @@ fn main() {
     matrix::read_tests(&args, &mut csv);
 
     matrix::write_tests(&args, &mut csv);
-    
 }

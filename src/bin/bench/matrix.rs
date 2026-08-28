@@ -125,16 +125,20 @@ pub(super) fn read_tests(args: &Args, csv: &mut Csv) {
     }
 }
 
-
-
 pub(super) fn write_tests(args: &Args, csv: &mut Csv) {
-    for (layout, size, size_name) in ["append", "bucket"].iter().flat_map(|layout| SIZES.iter().map(move |&(size, name)| (*layout, size, name)))
+    for (layout, size, size_name) in ["append", "bucket"]
+        .iter()
+        .flat_map(|layout| SIZES.iter().map(move |&(size, name)| (*layout, size, name)))
     {
         for width in [1u64, 10, 32, 1000] {
             let op_bytes = width * size;
 
             for io in ["sync", "uring"] {
-                let patterns: &[&str] = if width == 1 { &["arbitrary"] } else { &["arbitrary", "grouped"] };
+                let patterns: &[&str] = if width == 1 {
+                    &["arbitrary"]
+                } else {
+                    &["arbitrary", "grouped"]
+                };
 
                 for pattern in patterns {
                     let tag = [layout, io, "write", pattern, &width.to_string(), size_name];
@@ -151,12 +155,14 @@ pub(super) fn write_tests(args: &Args, csv: &mut Csv) {
 
                     let dir = args.data.join("bench-data").join("write-store");
                     let warm = width.min(2 * buckets);
-                    
                     let fresh = |written: &mut u64| {
                         let _ = std::fs::remove_dir_all(&dir);
-                        
-                        let mut heap = BenchmarkHeap::open(layout, io, &dir, config_for(WRITE_BUDGET, SyncPolicy::EveryN(width as u32)));
-
+                        let mut heap = BenchmarkHeap::open(
+                            layout,
+                            io,
+                            &dir,
+                            config_for(WRITE_BUDGET, SyncPolicy::EveryN(width as u32)),
+                        );
                         let mut payload = vec![0u8; size as usize];
 
                         SplitMix64::new(7).fill(&mut payload);
@@ -171,8 +177,6 @@ pub(super) fn write_tests(args: &Args, csv: &mut Csv) {
 
                         (heap, payload)
                     };
-
-
                     let mut written = 0u64;
                     let (mut heap, payload) = fresh(&mut written);
                     let mut repetition_results = Vec::new();
@@ -211,19 +215,15 @@ pub(super) fn write_tests(args: &Args, csv: &mut Csv) {
                             started.elapsed().as_nanos() as u64
                         });
 
-
                         latencies.retain(|&latency| latency > 1);
-
 
                         if latencies.is_empty() {
                             latencies.push(1);
                         }
-
                         written += used;
-                        
                         repetition_results.push(RepetitionResult {
                             stats: OperationStats::from_samples(&mut latencies),
-                            io_counters: heap.counters()
+                            io_counters: heap.counters(),
                         });
                     }
 
@@ -232,17 +232,8 @@ pub(super) fn write_tests(args: &Args, csv: &mut Csv) {
                     drop(heap);
 
                     let _ = std::fs::remove_dir_all(&dir);
-
-
-
-
-                    
                 }
             }
         }
     }
-
-
 }
-
-
