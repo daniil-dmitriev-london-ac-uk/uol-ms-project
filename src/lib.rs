@@ -12,7 +12,7 @@ pub mod rng;
 
 pub use append::AppendPlacement;
 pub use bucket::BucketPlacement;
-pub use heap::{Heap, HeapConfig, SyncPolicy};
+pub use heap::{Heap, HeapConfig, HeapStats, SyncPolicy};
 pub use io::{BlockIo, sync::SyncIo, uring::UringIo};
 pub use rng::{RandomSource, SplitMix64};
 

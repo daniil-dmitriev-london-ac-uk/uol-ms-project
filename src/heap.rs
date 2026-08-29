@@ -5,7 +5,7 @@ use crate::io::BlockIo;
 use crate::placement::Placement;
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SyncPolicy {
@@ -38,6 +38,16 @@ impl Default for HeapConfig {
     }
 }
 
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HeapStats {
+    pub data_file_bytes: u64,
+    pub data_used_bytes: u64,
+    pub index_file_bytes: u64,
+    pub registry_file_bytes: u64,
+}
+
+
 pub struct Heap<I: BlockIo, P: Placement> {
     io: I,
     placement: P,
@@ -46,6 +56,8 @@ pub struct Heap<I: BlockIo, P: Placement> {
     registry: Option<PagedFile>,
     config: HeapConfig,
     operations_since_sync: u32,
+    dir: PathBuf
+
 }
 
 impl<I: BlockIo, P: Placement> Heap<I, P> {
@@ -101,6 +113,7 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
             registry,
             config,
             operations_since_sync: 0,
+            dir: dir.to_path_buf(),
         })
     }
 
@@ -272,6 +285,24 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
     pub fn used_bytes(&self) -> u64 {
         self.placement.used_bytes()
     }
+
+
+    pub fn stats(&self) -> HeapStats {
+        let size = |file: &PagedFile| file.size().unwrap_or(0);
+        HeapStats {
+            data_file_bytes: size(&self.data.paged_file),
+            data_used_bytes: self.placement.used_bytes(),
+            index_file_bytes: size(&self.index.paged_file),
+            registry_file_bytes: self.registry.as_ref().map(&size).unwrap_or(0),
+        }
+        
+    }
+
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
 }
 
 impl<I: BlockIo, P: Placement> Drop for Heap<I, P> {

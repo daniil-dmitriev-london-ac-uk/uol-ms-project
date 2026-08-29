@@ -78,6 +78,10 @@ impl BenchmarkHeap {
         dispatch_heap!(self, heap, heap.read_batch(ids, out).expect("read_batch"))
     }
 
+    fn update(&mut self, id: u64, payload: &[u8]) {
+        dispatch_heap!(self, heap, heap.update(id, payload).expect("update"))
+    }
+
     fn flush(&mut self) {
         dispatch_heap!(self, heap, heap.flush().expect("flush"))
     }
@@ -88,6 +92,10 @@ impl BenchmarkHeap {
 
     fn reset_counters(&mut self) {
         dispatch_heap!(self, heap, heap.reset_io_counters())
+    }
+
+    fn stats(&self) -> heapstore::HeapStats {
+        dispatch_heap!(self, heap, heap.stats())
     }
 }
 
@@ -100,7 +108,7 @@ fn config_for(payload_bytes: u64, policy: SyncPolicy) -> HeapConfig {
     }
 }
 
-fn populate(layout: &str, dir: &Path, size: u64, count: u64, buckets: u64) -> Vec<u64> {
+fn populate(layout: &str, dir: &Path, size: u64, count: u64, bucket_count: u64) -> Vec<u64> {
     let _ = std::fs::remove_dir_all(dir);
     let mut heap = BenchmarkHeap::open(
         layout,
@@ -113,7 +121,7 @@ fn populate(layout: &str, dir: &Path, size: u64, count: u64, buckets: u64) -> Ve
     SplitMix64::new(42).fill(&mut payload);
 
     let ids: Vec<u64> = (0..count)
-        .map(|key| heap.insert_into(key % buckets, &payload))
+        .map(|key| heap.insert_into(key % bucket_count, &payload))
         .collect();
 
     heap.flush();
@@ -149,11 +157,11 @@ fn run_repetition(op_bytes: u64, mut operation: impl FnMut(u64) -> u64) -> Vec<u
         latencies.push(operation(iteration));
         iteration += 1;
 
-        let elapsed = started.elapsed().as_secs_f64();
+        let elapsed_seconds = started.elapsed().as_secs_f64();
 
-        if (iteration >= minimum_iterations && elapsed >= target_seconds)
+        if (iteration >= minimum_iterations && elapsed_seconds >= target_seconds)
             || iteration >= maximum_iterations
-            || elapsed >= maximum_seconds
+            || elapsed_seconds >= maximum_seconds
         {
             break;
         }
@@ -175,29 +183,25 @@ fn summary_row(
     let median_float = |mapper: &dyn Fn(&RepetitionResult) -> f64| {
         median_f64(&mut results.iter().map(mapper).collect::<Vec<_>>())
     };
-    let iterations: u64 = results
-        .iter()
-        .map(|repetition| repetition.stats.iterations)
-        .sum();
-    let p50_ns = median_integer(&|repetition| repetition.stats.p50_ns);
-    let p95_ns = median_integer(&|repetition| repetition.stats.p95_ns);
-    let p99_ns = median_integer(&|repetition| repetition.stats.p99_ns);
-    let operations_per_second = median_float(&|repetition| repetition.stats.ops_per_sec());
-    let per_operation = |value: u64, repetition: &RepetitionResult| {
-        value as f64 / repetition.stats.iterations as f64
-    };
+    let iterations: u64 = results.iter().map(|result| result.stats.iterations).sum();
+    let p50_ns = median_integer(&|result| result.stats.p50_ns);
+    let p95_ns = median_integer(&|result| result.stats.p95_ns);
+    let p99_ns = median_integer(&|result| result.stats.p99_ns);
+    let operations_per_second = median_float(&|result| result.stats.ops_per_sec());
+    let per_operation =
+        |value: u64, result: &RepetitionResult| value as f64 / result.stats.iterations as f64;
     let device_reads_per_operation =
-        median_float(&|repetition| per_operation(repetition.io_counters.reads, repetition));
+        median_float(&|result| per_operation(result.io_counters.reads, result));
     let device_writes_per_operation =
-        median_float(&|repetition| per_operation(repetition.io_counters.writes, repetition));
+        median_float(&|result| per_operation(result.io_counters.writes, result));
     let read_bytes_per_operation =
-        median_float(&|repetition| per_operation(repetition.io_counters.read_bytes, repetition));
+        median_float(&|result| per_operation(result.io_counters.read_bytes, result));
     let write_bytes_per_operation =
-        median_float(&|repetition| per_operation(repetition.io_counters.write_bytes, repetition));
+        median_float(&|result| per_operation(result.io_counters.write_bytes, result));
     let mut row: Vec<String> = tag.iter().map(|field| field.to_string()).collect();
 
     row.extend([
-        iterations.to_string(),
+        format!("{iterations}"),
         format!("{:.1}", p50_ns as f64 / 1000.0),
         format!("{:.1}", p95_ns as f64 / 1000.0),
         format!("{:.1}", p99_ns as f64 / 1000.0),
@@ -212,6 +216,15 @@ fn summary_row(
     ]);
 
     csv.row(&row).unwrap();
+
+    eprintln!(
+        "  {} p50={:.0}us p99={:.0}us ops/s={:.1} recs/s={:.0}",
+        tag.join(","),
+        p50_ns as f64 / 1000.0,
+        p99_ns as f64 / 1000.0,
+        operations_per_second,
+        operations_per_second * records as f64
+    );
 }
 
 const RESULTS_HEADER: &str = "layout,io,op,pattern,records,size,iters,p50_us,p95_us,p99_us,ops_per_s,recs_per_s,mb_per_s,dev_reads_per_op,dev_writes_per_op,read_amp,write_amp,governor";
@@ -226,7 +239,139 @@ struct Args {
 #[path = "bench/matrix.rs"]
 mod matrix;
 
-fn parse(argv: &[String]) -> Args {
+use matrix::{read_tests, write_tests};
+
+fn space(args: &Args) {
+    let mut csv = Csv::open(
+        &args.out.join("space.csv"),
+        "layout,phase,records,payload_bytes,data_used,data_file,data_blocks,index_blocks,registry_blocks,utilization",
+    )
+    .unwrap();
+
+    use std::os::linux::fs::MetadataExt;
+
+    let blocks = |path: &Path| {
+        path.metadata()
+            .map(|metadata| metadata.st_blocks() * 512)
+            .unwrap_or(0)
+    };
+
+    for layout in ["append", "bucket"] {
+        let dir = args.data.join("bench-data").join("space-store");
+        let size = 1 << 10;
+        let count = 20_000u64;
+        let ids = populate(layout, &dir, size, count, 16);
+        let mut heap = BenchmarkHeap::open(
+            layout,
+            "sync",
+            &dir,
+            config_for(size * count, SyncPolicy::None),
+        );
+        let mut phase = |heap: &mut BenchmarkHeap, name: &str, payload_bytes: u64| {
+            heap.flush();
+
+            let stats = heap.stats();
+            let (data_blocks, index_blocks, registry_blocks) = (
+                blocks(&dir.join("data.hs")),
+                blocks(&dir.join("index.hs")),
+                blocks(&dir.join("registry.hs")),
+            );
+
+            csv.row(&[
+                layout.into(),
+                name.into(),
+                count.to_string(),
+                payload_bytes.to_string(),
+                stats.data_used_bytes.to_string(),
+                stats.data_file_bytes.to_string(),
+                data_blocks.to_string(),
+                index_blocks.to_string(),
+                registry_blocks.to_string(),
+                format!("{:.4}", payload_bytes as f64 / stats.data_used_bytes as f64),
+            ])
+            .unwrap();
+        };
+
+        phase(&mut heap, "after-populate", size * count);
+
+        let mut payload = vec![0u8; size as usize];
+
+        SplitMix64::new(9).fill(&mut payload);
+
+        for &id in ids.iter().step_by(4) {
+            heap.update(id, &payload);
+        }
+
+        phase(&mut heap, "after-update-quarter", size * count);
+
+        drop(heap);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    println!("space.csv is ready");
+}
+
+fn updates(args: &Args) {
+    let mut csv = Csv::open(&args.out.join("updates.csv"), RESULTS_HEADER).unwrap();
+
+    for layout in ["append", "bucket"] {
+        for (size, size_name) in [(1u64 << 10, "1K"), (64 << 10, "64K")] {
+            let dir = args.data.join("bench-data").join("upd-store");
+            let population = 4096u64;
+
+            for io in ["sync", "uring"] {
+                let tag = [layout, io, "update", "arbitrary", "1", size_name];
+
+                if !tag.join(",").contains(&args.filter) {
+                    continue;
+                }
+
+                let ids = populate(layout, &dir, size, population, 16);
+                let mut heap = BenchmarkHeap::open(
+                    layout,
+                    io,
+                    &dir,
+                    config_for(size * population, SyncPolicy::None),
+                );
+                let mut payload = vec![0u8; size as usize];
+
+                SplitMix64::new(11).fill(&mut payload);
+
+                let mut repetition_results = Vec::new();
+
+                for repetition in 0..args.repetitions {
+                    let mut rng = SplitMix64::new(100 + repetition as u64);
+
+                    heap.reset_counters();
+
+                    let mut latencies = run_repetition(size, |_| {
+                        let id = ids[rng.below(population) as usize];
+                        let operation_started = Instant::now();
+
+                        heap.update(id, &payload);
+
+                        operation_started.elapsed().as_nanos() as u64
+                    });
+
+                    repetition_results.push(RepetitionResult {
+                        stats: OperationStats::from_samples(&mut latencies),
+                        io_counters: heap.counters(),
+                    });
+                }
+
+                summary_row(&mut csv, &tag, &repetition_results, 1, size);
+            }
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    println!("updates.csv is ready");
+}
+
+fn parse(argv: &[String]) -> (String, Args) {
+    let command = argv.first().cloned().unwrap_or_else(|| "help".into());
     let mut args = Args {
         data: PathBuf::from("."),
         out: PathBuf::from("metrics"),
@@ -237,39 +382,49 @@ fn parse(argv: &[String]) -> Args {
 
     while argument_index < argv.len() {
         match (
-            argv.get(argument_index).map(String::as_str),
+            argv.get(argument_index).map(|value| value.as_str()),
             argv.get(argument_index + 1),
         ) {
             (Some("--dir"), Some(value)) => args.data = value.into(),
             (Some("--out"), Some(value)) => args.out = value.into(),
             (Some("--filter"), Some(value)) => args.filter = value.clone(),
             (Some("--reps"), Some(value)) => args.repetitions = value.parse().expect("reps"),
-            (Some(flag), _) => panic!("unknown argument {flag}"),
             (None, _) => break,
+            (Some(flag), _) => panic!("unknown argument {flag}"),
         }
 
         argument_index += 2;
     }
 
-    args
+    (command, args)
 }
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-
-    if argv.first().map(String::as_str) != Some("matrix") {
-        eprintln!("command: matrix; arguments: --dir --out --filter --reps");
-
-        std::process::exit(2);
-    }
-
-    let args = parse(&argv);
+    let (command, args) = parse(&argv);
 
     std::fs::create_dir_all(&args.out).expect("out dir");
 
-    let mut csv = Csv::open(&args.out.join("matrix.csv"), RESULTS_HEADER).unwrap();
+    match command.as_str() {
+        "matrix" => {
+            let mut csv = Csv::open(&args.out.join("matrix.csv"), RESULTS_HEADER).unwrap();
+            let started = Instant::now();
 
-    matrix::read_tests(&args, &mut csv);
+            read_tests(&args, &mut csv);
 
-    matrix::write_tests(&args, &mut csv);
+            write_tests(&args, &mut csv);
+
+            eprintln!(
+                "matrix completed in {:.0}s",
+                started.elapsed().as_secs_f64()
+            );
+        }
+        "space" => space(&args),
+        "updates" => updates(&args),
+        _ => {
+            eprintln!("commands: matrix | space | updates; arguments: --dir --out --filter --reps");
+
+            std::process::exit(2);
+        }
+    }
 }
