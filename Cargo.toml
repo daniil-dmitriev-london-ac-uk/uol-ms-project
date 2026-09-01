@@ -8,8 +8,15 @@ description = "Embedded heap storage layer for variable-size records on NVMe/Lin
 name = "bench"
 path = "src/bin/bench.rs"
 
+[[bin]]
+name = "crash"
+path = "src/bin/crash.rs"
+
 [dependencies]
 libc = "0.2"
 io-uring = "0.7"
+
+[profile.release]
+debug = true
 
 [workspace]
