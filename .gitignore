@@ -23,3 +23,5 @@ target
 data.hs
 index.hs
 registry.hs
+
+metrics
