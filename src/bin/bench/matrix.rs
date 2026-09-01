@@ -24,7 +24,9 @@ pub(super) fn read_tests(args: &Args, csv: &mut Csv) {
         for (_, population, bucket_count, records) in classes {
             if population < *records.iter().max().unwrap() {
                 for operation_width in &records {
-                    eprintln!("skip read {layout} {size_name} operation_width={operation_width}: workloads not fit");
+                    eprintln!(
+                        "skip read {layout} {size_name} operation_width={operation_width}: workload does not fit"
+                    );
                 }
 
                 continue;
@@ -41,11 +43,15 @@ pub(super) fn read_tests(args: &Args, csv: &mut Csv) {
                 })
             });
 
-            if !need_run { continue; }
+            if !need_run {
+                continue;
+            }
 
             let dir = args.data.join("bench-data").join("read-store");
 
-            eprintln!("populate {layout} {size_name}: {population} records, {bucket_count} buckets");
+            eprintln!(
+                "populate {layout} {size_name}: {population} records, {bucket_count} buckets"
+            );
 
             let ids = populate(layout, &dir, size, population, bucket_count);
 

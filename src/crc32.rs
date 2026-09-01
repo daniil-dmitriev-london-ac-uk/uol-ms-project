@@ -41,9 +41,6 @@ const fn build_tables() -> [[u32; 256]; 8] {
     tables
 }
 
-
-
-
 pub fn crc32c(data: &[u8]) -> u32 {
     let mut crc = !0u32;
     let mut chunks = data.chunks_exact(8);
@@ -62,8 +59,6 @@ pub fn crc32c(data: &[u8]) -> u32 {
             ^ TABLES[0][(upper >> 24) as usize];
     }
 
-
-    
     for &byte in chunks.remainder() {
         crc = (crc >> 8) ^ TABLES[0][((crc ^ byte as u32) & 0xFF) as usize];
     }

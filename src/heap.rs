@@ -38,7 +38,6 @@ impl Default for HeapConfig {
     }
 }
 
-
 #[derive(Debug, Default, Clone, Copy)]
 pub struct HeapStats {
     pub data_file_bytes: u64,
@@ -46,7 +45,6 @@ pub struct HeapStats {
     pub index_file_bytes: u64,
     pub registry_file_bytes: u64,
 }
-
 
 pub struct Heap<I: BlockIo, P: Placement> {
     io: I,
@@ -56,8 +54,7 @@ pub struct Heap<I: BlockIo, P: Placement> {
     registry: Option<PagedFile>,
     config: HeapConfig,
     operations_since_sync: u32,
-    dir: PathBuf
-
+    dir: PathBuf,
 }
 
 impl<I: BlockIo, P: Placement> Heap<I, P> {
@@ -286,23 +283,20 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         self.placement.used_bytes()
     }
 
-
     pub fn stats(&self) -> HeapStats {
         let size = |file: &PagedFile| file.size().unwrap_or(0);
+
         HeapStats {
             data_file_bytes: size(&self.data.paged_file),
             data_used_bytes: self.placement.used_bytes(),
             index_file_bytes: size(&self.index.paged_file),
             registry_file_bytes: self.registry.as_ref().map(&size).unwrap_or(0),
         }
-        
     }
-
 
     pub fn dir(&self) -> &Path {
         &self.dir
     }
-
 }
 
 impl<I: BlockIo, P: Placement> Drop for Heap<I, P> {
