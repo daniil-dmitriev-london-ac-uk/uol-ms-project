@@ -1,4 +1,5 @@
 use super::{BlockIo, IoCounters, ReadReq, WriteReq, fdatasync_counted};
+use crate::error::Result;
 
 use std::fs::File;
 use std::io;
@@ -16,7 +17,7 @@ impl SyncIo {
 }
 
 impl BlockIo for SyncIo {
-    fn read_vec(&mut self, file: &File, requests: &mut [ReadReq<'_>]) -> io::Result<()> {
+    fn read_vec(&mut self, file: &File, requests: &mut [ReadReq<'_>]) -> Result<()> {
         for request in requests {
             let mut done = 0usize;
 
@@ -39,7 +40,7 @@ impl BlockIo for SyncIo {
         Ok(())
     }
 
-    fn write_vec(&mut self, file: &File, requests: &[WriteReq<'_>]) -> io::Result<()> {
+    fn write_vec(&mut self, file: &File, requests: &[WriteReq<'_>]) -> Result<()> {
         for request in requests {
             let mut done = 0usize;
 
@@ -48,7 +49,7 @@ impl BlockIo for SyncIo {
                     file.write_at(&request.buf[done..], request.off + done as u64)?;
 
                 if processed_bytes == 0 {
-                    return Err(io::ErrorKind::WriteZero.into());
+                    return Err(io::Error::from(io::ErrorKind::WriteZero).into());
                 }
 
                 self.counters.writes += 1;
@@ -60,7 +61,7 @@ impl BlockIo for SyncIo {
         Ok(())
     }
 
-    fn sync(&mut self, file: &File) -> io::Result<()> {
+    fn sync(&mut self, file: &File) -> Result<()> {
         fdatasync_counted(file, &mut self.counters)
     }
 

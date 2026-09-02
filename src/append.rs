@@ -1,11 +1,10 @@
 use crate::data::{DataFile, PagedFile};
+use crate::error::Result;
 use crate::format::{PAGE_SIZE_U64, SLOT_SIZE, Slot};
 use crate::heap::HeapConfig;
 use crate::index::IndexFile;
 use crate::io::BlockIo;
 use crate::placement::Placement;
-
-use std::io;
 
 pub struct AppendPlacement {
     pub cursor: u64,
@@ -23,7 +22,7 @@ impl Placement for AppendPlacement {
         index: &mut IndexFile,
         _registry: Option<&mut PagedFile>,
         created: bool,
-    ) -> io::Result<Self> {
+    ) -> Result<Self> {
         if created {
             data.paged_file
                 .ensure_alloc(config.initial_size, config.growth)?;
@@ -70,8 +69,8 @@ impl Placement for AppendPlacement {
         data: &mut DataFile,
         _registry: Option<&mut PagedFile>,
         _bucket: u64,
-        total_len: u64,
-    ) -> io::Result<(u64, u64)> {
+        total_len: u64
+    ) -> Result<(u64, u64)> {
         let offset = self.cursor;
 
         data.paged_file
@@ -92,8 +91,8 @@ impl Placement for AppendPlacement {
         data: &mut DataFile,
         _registry: Option<&mut PagedFile>,
         _bucket: u64,
-        total_len: u64,
-    ) -> io::Result<u64> {
+        total_len: u64
+    ) -> Result<u64> {
         let offset = self.cursor;
 
         data.paged_file

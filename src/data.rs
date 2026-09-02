@@ -1,14 +1,16 @@
 use crate::crc32::crc32c;
-use crate::format::{FileHeader, PAGE, PAGE_SIZE_U64, page_down, page_up};
-use crate::format::{RecordHeader, header_len};
+use crate::error::{HeapError, Result};
+use crate::format::{
+    FileHeader, PAGE, PAGE_SIZE_U64, RecordHeader, header_len, page_down, page_up,
+};
 use crate::io::{AlignedBuf, BlockIo, ReadReq, WriteReq, fallocate, open_direct};
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io;
 use std::path::Path;
 
 const MAX_STAGED_WRITES: usize = 64;
+
 const MAX_POOLED_BUFFERS: usize = 16;
 const MAX_POOLED_BUFFER_CAPACITY: usize = 8 << 20;
 
@@ -16,198 +18,6 @@ struct StagedWrite {
     start: u64,
     buffer: AlignedBuf,
     head: Option<Vec<u8>>,
-}
-
-pub struct DataFile {
-    pub paged_file: PagedFile,
-    pub with_bucket: bool,
-    pub integrity: bool,
-}
-
-impl DataFile {
-    pub fn record_header_len(&self) -> u64 {
-        header_len(self.with_bucket) as u64
-    }
-
-    pub fn stage_record(
-        &mut self,
-        io: &mut impl BlockIo,
-        off: u64,
-        bucket: u64,
-        id: u64,
-        version: u16,
-        payload: &[u8],
-    ) -> io::Result<()> {
-        let crc = if self.integrity { crc32c(payload) } else { 0 };
-        let header = RecordHeader {
-            len: payload.len() as u64,
-            bucket,
-            id,
-            version,
-            crc,
-        };
-        let mut buf = [0u8; 38];
-        let len = header_len(self.with_bucket);
-
-        header.encode(self.with_bucket, &mut buf[..len]);
-        self.paged_file.stage(io, off, &[&buf[..len], payload])
-    }
-
-    fn parse(
-        &self,
-        buffer: &[u8],
-        buffer_offset: usize,
-        total_len: u64,
-        expect_id: u64,
-        offset: u64,
-        out: &mut Vec<u8>,
-    ) -> io::Result<RecordHeader> {
-        let header_len = header_len(self.with_bucket);
-        let header =
-            RecordHeader::decode(&buffer[buffer_offset..], self.with_bucket).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "record header checksum mismatch",
-                )
-            })?;
-
-        if header.id != expect_id || header.len + header_len as u64 != total_len {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "record identity mismatch",
-            ));
-        }
-
-        let payload = &buffer[buffer_offset + header_len..buffer_offset + total_len as usize];
-
-        if self.integrity && crc32c(payload) != header.crc {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("payload checksum mismatch at {offset}"),
-            ));
-        }
-
-        out.clear();
-        out.extend_from_slice(payload);
-
-        Ok(header)
-    }
-
-    pub fn read_record(
-        &mut self,
-        io: &mut impl BlockIo,
-        off: u64,
-        total_len: u64,
-        expect_id: u64,
-        out: &mut Vec<u8>,
-    ) -> io::Result<RecordHeader> {
-        let (buffer, buffer_offset) = self.paged_file.read_aligned(io, off, total_len)?;
-        let result = self.parse(&buffer, buffer_offset, total_len, expect_id, off, out);
-
-        self.paged_file.recycle(buffer);
-
-        result
-    }
-
-    pub fn read_header(
-        &mut self,
-        io: &mut impl BlockIo,
-        off: u64,
-        expect_id: u64,
-    ) -> io::Result<RecordHeader> {
-        let (buffer, buffer_offset) =
-            self.paged_file
-                .read_aligned(io, off, self.record_header_len())?;
-        let header = RecordHeader::decode(&buffer[buffer_offset..], self.with_bucket);
-
-        self.paged_file.recycle(buffer);
-
-        let header = header.ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "record header checksum mismatch",
-            )
-        })?;
-
-        if header.id != expect_id {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "record identity mismatch",
-            ));
-        }
-
-        Ok(header)
-    }
-
-    pub fn read_many(
-        &mut self,
-        io: &mut impl BlockIo,
-        items: &[(u64, u64, u64)],
-        out: &mut Vec<Vec<u8>>,
-    ) -> io::Result<()> {
-        self.paged_file.flush(io)?;
-
-        let mut order: Vec<usize> = (0..items.len()).collect();
-
-        order.sort_by_key(|&item_index| items[item_index].0);
-
-        let mut groups: Vec<(u64, u64, Vec<usize>)> = Vec::new();
-
-        for &item_index in &order {
-            let (offset, length, _) = items[item_index];
-            let (group_start, group_end) = (page_down(offset), page_up(offset + length));
-
-            match groups.last_mut() {
-                Some(group) if group_start <= group.1 => {
-                    group.1 = group.1.max(group_end);
-                    group.2.push(item_index);
-                }
-                _ => groups.push((group_start, group_end, vec![item_index])),
-            }
-        }
-
-        let mut buffers: Vec<AlignedBuf> = groups
-            .iter()
-            .map(|group| self.paged_file.take_sized((group.1 - group.0) as usize))
-            .collect();
-
-        {
-            let mut requests: Vec<ReadReq<'_>> = groups
-                .iter()
-                .zip(buffers.iter_mut())
-                .map(|(group, buffer)| ReadReq {
-                    off: group.0,
-                    buf: buffer,
-                })
-                .collect();
-
-            io.read_vec(&self.paged_file.file, &mut requests)?;
-        }
-
-        out.clear();
-        out.resize(items.len(), Vec::new());
-
-        for (group, buffer) in groups.iter().zip(&buffers) {
-            for &item_index in &group.2 {
-                let (offset, length, id) = items[item_index];
-
-                self.parse(
-                    buffer,
-                    (offset - group.0) as usize,
-                    length,
-                    id,
-                    offset,
-                    &mut out[item_index],
-                )?;
-            }
-        }
-
-        for buffer in buffers {
-            self.paged_file.recycle(buffer);
-        }
-
-        Ok(())
-    }
 }
 
 impl StagedWrite {
@@ -230,7 +40,7 @@ pub struct PagedFile {
 }
 
 impl PagedFile {
-    pub fn create(path: &Path, kind: u8, layout: u8, io: &mut impl BlockIo) -> io::Result<Self> {
+    pub fn create(path: &Path, kind: u8, layout: u8, io: &mut impl BlockIo) -> Result<Self> {
         let file = open_direct(path, true)?;
 
         file.set_len(0)?;
@@ -255,16 +65,15 @@ impl PagedFile {
         Ok(paged_file)
     }
 
-    pub fn open(path: &Path, kind: u8, layout: u8, io: &mut impl BlockIo) -> io::Result<Self> {
+    pub fn open(path: &Path, kind: u8, layout: u8, io: &mut impl BlockIo) -> Result<Self> {
         let file = open_direct(path, false)?;
-        let allocated_end = file.metadata()?.len();
         let paged_file = PagedFile {
             file,
             tail_pages: HashMap::new(),
             pool: Vec::new(),
             staged_writes: Vec::new(),
             pending_bytes: 0,
-            allocated_end,
+            allocated_end: 0,
         };
         let mut page = AlignedBuf::zeroed(PAGE);
 
@@ -278,14 +87,18 @@ impl PagedFile {
 
         match FileHeader::decode(&page) {
             Some(header) if header.kind == kind && header.layout == layout => Ok(paged_file),
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "invalid file header",
-            )),
+            _ => Err(HeapError::Corrupt {
+                what: "file header",
+                offset: 0,
+            }),
         }
     }
 
-    pub fn ensure_alloc(&mut self, upto: u64, chunk: u64) -> io::Result<()> {
+    pub fn size(&self) -> Result<u64> {
+        Ok(self.file.metadata()?.len())
+    }
+
+    pub fn ensure_alloc(&mut self, upto: u64, chunk: u64) -> Result<()> {
         if upto <= self.allocated_end {
             return Ok(());
         }
@@ -299,28 +112,32 @@ impl PagedFile {
         Ok(())
     }
 
-    pub fn size(&self) -> io::Result<u64> {
-        Ok(self.file.metadata()?.len())
-    }
-
     pub fn note_alloc(&mut self, upto: u64) {
         self.allocated_end = self.allocated_end.max(upto);
     }
 
+    pub fn has_pending(&self) -> bool {
+        !self.staged_writes.is_empty()
+    }
+
+    pub fn pending_bytes(&self) -> usize {
+        self.pending_bytes
+    }
+
     fn take_buffer(&mut self) -> AlignedBuf {
-        let mut buf = self.pool.pop().unwrap_or_else(|| AlignedBuf::zeroed(0));
+        let mut buffer = self.pool.pop().unwrap_or_else(|| AlignedBuf::zeroed(0));
 
-        buf.clear();
+        buffer.clear();
 
-        buf
+        buffer
     }
 
     pub fn take_sized(&mut self, len: usize) -> AlignedBuf {
-        let mut buf = self.take_buffer();
+        let mut buffer = self.take_buffer();
 
-        buf.resize_zeroed(len);
+        buffer.resize_zeroed(len);
 
-        buf
+        buffer
     }
 
     pub fn recycle(&mut self, buf: AlignedBuf) {
@@ -329,15 +146,7 @@ impl PagedFile {
         }
     }
 
-    pub fn pending_bytes(&self) -> usize {
-        self.pending_bytes
-    }
-
-    pub fn has_pending(&self) -> bool {
-        !self.staged_writes.is_empty()
-    }
-
-    pub fn stage(&mut self, io: &mut impl BlockIo, off: u64, parts: &[&[u8]]) -> io::Result<()> {
+    pub fn stage(&mut self, io: &mut impl BlockIo, off: u64, parts: &[&[u8]]) -> Result<()> {
         let len: usize = parts.iter().map(|part| part.len()).sum();
 
         if let Some(staged_write_index) = self
@@ -388,7 +197,7 @@ impl PagedFile {
         let mut head = None;
 
         if pad > 0 {
-            let page = match self.tail_pages.get(&head_page) {
+            let page: Vec<u8> = match self.tail_pages.get(&head_page) {
                 Some(page) => page.clone(),
                 None => {
                     let mut page = AlignedBuf::zeroed(PAGE);
@@ -423,7 +232,7 @@ impl PagedFile {
         Ok(())
     }
 
-    pub fn flush(&mut self, io: &mut impl BlockIo) -> io::Result<()> {
+    pub fn flush(&mut self, io: &mut impl BlockIo) -> Result<()> {
         if self.staged_writes.is_empty() {
             return Ok(());
         }
@@ -440,23 +249,24 @@ impl PagedFile {
             if end % PAGE_SIZE_U64 != 0 {
                 let last = page_down(end);
                 let within = (end - last) as usize;
-                let suffix = if last == staged_write.base() && staged_write.head.is_some() {
-                    staged_write.head.take()
-                } else if let Some(page) = self.tail_pages.get(&last) {
-                    Some(page.clone())
-                } else {
-                    let mut page = AlignedBuf::zeroed(PAGE);
+                let suffix: Option<Vec<u8>> =
+                    if last == staged_write.base() && staged_write.head.is_some() {
+                        staged_write.head.take()
+                    } else if let Some(page) = self.tail_pages.get(&last) {
+                        Some(page.clone())
+                    } else {
+                        let mut page = AlignedBuf::zeroed(PAGE);
 
-                    io.read_vec(
-                        &self.file,
-                        &mut [ReadReq {
-                            off: last,
-                            buf: &mut page,
-                        }],
-                    )?;
+                        io.read_vec(
+                            &self.file,
+                            &mut [ReadReq {
+                                off: last,
+                                buf: &mut page,
+                            }],
+                        )?;
 
-                    Some(page.to_vec())
-                };
+                        Some(page.to_vec())
+                    };
 
                 if let Some(page) = suffix {
                     let page_buffer_offset = (last - staged_write.base()) as usize;
@@ -505,7 +315,7 @@ impl PagedFile {
         io: &mut impl BlockIo,
         off: u64,
         len: u64,
-    ) -> io::Result<(AlignedBuf, usize)> {
+    ) -> Result<(AlignedBuf, usize)> {
         self.flush(io)?;
 
         let base = page_down(off);
@@ -522,5 +332,199 @@ impl PagedFile {
         )?;
 
         Ok((buf, (off - base) as usize))
+    }
+}
+
+pub struct DataFile {
+    pub paged_file: PagedFile,
+    pub with_bucket: bool,
+    pub integrity: bool,
+}
+
+impl DataFile {
+    pub fn record_header_len(&self) -> u64 {
+        header_len(self.with_bucket) as u64
+    }
+
+    pub fn stage_record(
+        &mut self,
+        io: &mut impl BlockIo,
+        off: u64,
+        bucket: u64,
+        id: u64,
+        version: u16,
+        payload: &[u8],
+    ) -> Result<()> {
+        let crc = if self.integrity { crc32c(payload) } else { 0 };
+        let header = RecordHeader {
+            len: payload.len() as u64,
+            bucket,
+            id,
+            version,
+            crc,
+        };
+        let mut header_buffer = [0u8; 38];
+        let header_size = header_len(self.with_bucket);
+
+        header.encode(self.with_bucket, &mut header_buffer[..header_size]);
+        self.paged_file
+            .stage(io, off, &[&header_buffer[..header_size], payload])
+    }
+
+    fn parse(
+        &self,
+        buffer: &[u8],
+        buffer_offset: usize,
+        total_len: u64,
+        expect_id: u64,
+        offset: u64,
+        out: &mut Vec<u8>,
+    ) -> Result<RecordHeader> {
+        let header_size = header_len(self.with_bucket);
+        let header = RecordHeader::decode(&buffer[buffer_offset..], self.with_bucket).ok_or(
+            HeapError::Corrupt {
+                what: "record header",
+                offset,
+            },
+        )?;
+
+        if header.id != expect_id || header.len + header_size as u64 != total_len {
+            return Err(HeapError::Corrupt {
+                what: "record identity",
+                offset,
+            });
+        }
+
+        let payload_end = buffer_offset + header_size + header.len as usize;
+        let payload = &buffer[buffer_offset + header_size..payload_end];
+
+        if self.integrity && crc32c(payload) != header.crc {
+            return Err(HeapError::Corrupt {
+                what: "record payload",
+                offset,
+            });
+        }
+
+        out.clear();
+        out.extend_from_slice(payload);
+
+        Ok(header)
+    }
+
+    pub fn read_record(
+        &mut self,
+        io: &mut impl BlockIo,
+        off: u64,
+        total_len: u64,
+        expect_id: u64,
+        out: &mut Vec<u8>,
+    ) -> Result<RecordHeader> {
+        let (buffer, buffer_offset) = self.paged_file.read_aligned(io, off, total_len)?;
+        let parse_result = self.parse(&buffer, buffer_offset, total_len, expect_id, off, out);
+
+        self.paged_file.recycle(buffer);
+
+        parse_result
+    }
+
+    pub fn read_header(
+        &mut self,
+        io: &mut impl BlockIo,
+        off: u64,
+        expect_id: u64,
+    ) -> Result<RecordHeader> {
+        let (buffer, buffer_offset) =
+            self.paged_file
+                .read_aligned(io, off, self.record_header_len())?;
+        let header = RecordHeader::decode(&buffer[buffer_offset..], self.with_bucket);
+
+        self.paged_file.recycle(buffer);
+
+        let header = header.ok_or(HeapError::Corrupt {
+            what: "record header",
+            offset: off,
+        })?;
+
+        if header.id != expect_id {
+            return Err(HeapError::Corrupt {
+                what: "record identity",
+                offset: off,
+            });
+        }
+
+        Ok(header)
+    }
+
+    pub fn read_many(
+        &mut self,
+        io: &mut impl BlockIo,
+        items: &[(u64, u64, u64)],
+        out: &mut Vec<Vec<u8>>,
+    ) -> Result<()> {
+        self.paged_file.flush(io)?;
+
+        let mut order: Vec<usize> = (0..items.len()).collect();
+
+        order.sort_by_key(|&item_index| items[item_index].0);
+
+        let mut groups: Vec<(u64, u64, Vec<usize>)> = Vec::new();
+
+        for &item_index in &order {
+            let (offset, length, _) = items[item_index];
+            let (group_start, group_end) = (page_down(offset), page_up(offset + length));
+
+            match groups.last_mut() {
+                Some(group) if group_start <= group.1 => {
+                    group.1 = group.1.max(group_end);
+                    group.2.push(item_index);
+                }
+                _ => groups.push((group_start, group_end, vec![item_index])),
+            }
+        }
+
+        let mut buffers: Vec<AlignedBuf> = groups
+            .iter()
+            .map(|group| self.paged_file.take_sized((group.1 - group.0) as usize))
+            .collect();
+
+        {
+            let mut requests: Vec<ReadReq<'_>> = groups
+                .iter()
+                .zip(buffers.iter_mut())
+                .map(|(group, buffer)| ReadReq {
+                    off: group.0,
+                    buf: buffer,
+                })
+                .collect();
+
+            io.read_vec(&self.paged_file.file, &mut requests)?;
+        }
+
+        out.clear();
+        out.resize(items.len(), Vec::new());
+
+        for (group, buffer) in groups.iter().zip(buffers.iter()) {
+            for &item_index in &group.2 {
+                let (offset, length, id) = items[item_index];
+                let mut payload = Vec::new();
+
+                self.parse(
+                    buffer,
+                    (offset - group.0) as usize,
+                    length,
+                    id,
+                    offset,
+                    &mut payload,
+                )?;
+
+                out[item_index] = payload;
+            }
+        }
+
+        for buffer in buffers {
+            self.paged_file.recycle(buffer);
+        }
+
+        Ok(())
     }
 }

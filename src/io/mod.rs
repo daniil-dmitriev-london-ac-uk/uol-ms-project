@@ -1,6 +1,7 @@
 pub mod sync;
 pub mod uring;
 
+use crate::error::Result;
 use crate::format::PAGE;
 
 use std::alloc::{Layout, alloc_zeroed, dealloc};
@@ -133,14 +134,14 @@ pub struct WriteReq<'a> {
 }
 
 pub trait BlockIo {
-    fn read_vec(&mut self, file: &File, requests: &mut [ReadReq<'_>]) -> io::Result<()>;
-    fn write_vec(&mut self, file: &File, requests: &[WriteReq<'_>]) -> io::Result<()>;
-    fn sync(&mut self, file: &File) -> io::Result<()>;
+    fn read_vec(&mut self, file: &File, requests: &mut [ReadReq<'_>]) -> Result<()>;
+    fn write_vec(&mut self, file: &File, requests: &[WriteReq<'_>]) -> Result<()>;
+    fn sync(&mut self, file: &File) -> Result<()>;
     fn counters(&self) -> IoCounters;
     fn reset_counters(&mut self);
 }
 
-pub fn open_direct(path: &Path, create: bool) -> io::Result<File> {
+pub fn open_direct(path: &Path, create: bool) -> Result<File> {
     let mut options = std::fs::OpenOptions::new();
 
     options.read(true).write(true).custom_flags(libc::O_DIRECT);
@@ -149,16 +150,16 @@ pub fn open_direct(path: &Path, create: bool) -> io::Result<File> {
         options.create(true);
     }
 
-    options.open(path)
+    Ok(options.open(path)?)
 }
 
-pub fn fdatasync_counted(file: &File, counters: &mut IoCounters) -> io::Result<()> {
+pub fn fdatasync_counted(file: &File, counters: &mut IoCounters) -> Result<()> {
     use std::os::unix::io::AsRawFd;
 
     let result_code = unsafe { libc::fdatasync(file.as_raw_fd()) };
 
     if result_code != 0 {
-        return Err(io::Error::last_os_error());
+        return Err(io::Error::last_os_error().into());
     }
 
     counters.syncs += 1;
@@ -166,13 +167,13 @@ pub fn fdatasync_counted(file: &File, counters: &mut IoCounters) -> io::Result<(
     Ok(())
 }
 
-pub fn fallocate(file: &File, offset: u64, len: u64) -> io::Result<()> {
+pub fn fallocate(file: &File, offset: u64, len: u64) -> Result<()> {
     use std::os::unix::io::AsRawFd;
 
     let result_code = unsafe { libc::fallocate(file.as_raw_fd(), 0, offset as i64, len as i64) };
 
     if result_code != 0 {
-        return Err(io::Error::last_os_error());
+        return Err(io::Error::last_os_error().into());
     }
 
     Ok(())

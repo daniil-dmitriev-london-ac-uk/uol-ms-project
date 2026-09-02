@@ -1,10 +1,10 @@
 use crate::data::{DataFile, PagedFile};
+use crate::error::{HeapError, Result};
 use crate::format::{SLOT_SIZE, Slot};
 use crate::index::IndexFile;
 use crate::io::BlockIo;
 use crate::placement::Placement;
 
-use std::io;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -58,7 +58,7 @@ pub struct Heap<I: BlockIo, P: Placement> {
 }
 
 impl<I: BlockIo, P: Placement> Heap<I, P> {
-    pub fn open(dir: &Path, mut io: I, config: HeapConfig) -> io::Result<Self> {
+    pub fn open(dir: &Path, mut io: I, config: HeapConfig) -> Result<Self> {
         std::fs::create_dir_all(dir)?;
 
         let data_path = dir.join("data.hs");
@@ -114,11 +114,11 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         })
     }
 
-    pub fn insert(&mut self, payload: &[u8]) -> io::Result<u64> {
+    pub fn insert(&mut self, payload: &[u8]) -> Result<u64> {
         self.insert_into(0, payload)
     }
 
-    pub fn insert_into(&mut self, bucket: u64, payload: &[u8]) -> io::Result<u64> {
+    pub fn insert_into(&mut self, bucket: u64, payload: &[u8]) -> Result<u64> {
         let total = self.data.record_header_len() + payload.len() as u64;
         let (off, id) = self.placement.alloc(
             &mut self.io,
@@ -150,11 +150,11 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         Ok(id)
     }
 
-    pub fn read(&mut self, id: u64, out: &mut Vec<u8>) -> io::Result<()> {
+    pub fn read(&mut self, id: u64, out: &mut Vec<u8>) -> Result<()> {
         let slot = self
             .index
             .read_slot(&mut self.io, id)?
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "record is not indexed"))?;
+            .ok_or(HeapError::NotFound(id))?;
 
         self.data
             .read_record(&mut self.io, slot.offset, slot.total_len, id, out)?;
@@ -162,13 +162,12 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         Ok(())
     }
 
-    pub fn read_batch(&mut self, ids: &[u64], out: &mut Vec<Vec<u8>>) -> io::Result<()> {
+    pub fn read_batch(&mut self, ids: &[u64], out: &mut Vec<Vec<u8>>) -> Result<()> {
         let slots = self.index.read_slots(&mut self.io, ids)?;
         let mut items = Vec::with_capacity(ids.len());
 
         for (&id, slot) in ids.iter().zip(slots) {
-            let slot = slot
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "record is not indexed"))?;
+            let slot = slot.ok_or(HeapError::NotFound(id))?;
 
             items.push((slot.offset, slot.total_len, id));
         }
@@ -176,11 +175,11 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         self.data.read_many(&mut self.io, &items, out)
     }
 
-    pub fn update(&mut self, id: u64, payload: &[u8]) -> io::Result<()> {
+    pub fn update(&mut self, id: u64, payload: &[u8]) -> Result<()> {
         let slot = self
             .index
             .read_slot(&mut self.io, id)?
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "record is not indexed"))?;
+            .ok_or(HeapError::NotFound(id))?;
         let old = self.data.read_header(&mut self.io, slot.offset, id)?;
         let total = self.data.record_header_len() + payload.len() as u64;
         let off = self.placement.alloc_update(
@@ -213,25 +212,25 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         self.after_write()
     }
 
-    pub fn delete(&mut self, id: u64) -> io::Result<()> {
+    pub fn delete(&mut self, id: u64) -> Result<()> {
         let old = self
             .index
             .read_slot(&mut self.io, id)?
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "record is not indexed"))?;
+            .ok_or(HeapError::NotFound(id))?;
 
         self.index.stage_tombstone(&mut self.io, id, old)?;
 
         self.after_write()
     }
 
-    pub fn flush(&mut self) -> io::Result<()> {
+    pub fn flush(&mut self) -> Result<()> {
         self.commit()?;
 
         self.index.paged_file.flush(&mut self.io)?;
         self.io.sync(&self.index.paged_file.file)
     }
 
-    fn commit(&mut self) -> io::Result<()> {
+    fn commit(&mut self) -> Result<()> {
         if let Some(registry) = &mut self.registry {
             if registry.has_pending() {
                 registry.flush(&mut self.io)?;
@@ -245,7 +244,7 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         self.index.paged_file.flush(&mut self.io)
     }
 
-    fn after_write(&mut self) -> io::Result<()> {
+    fn after_write(&mut self) -> Result<()> {
         self.operations_since_sync = self.operations_since_sync.wrapping_add(1);
 
         if let SyncPolicy::EveryN(sync_interval) = self.config.sync_policy {

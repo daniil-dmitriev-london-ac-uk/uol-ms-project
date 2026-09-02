@@ -1,9 +1,8 @@
 use crate::data::{DataFile, PagedFile};
+use crate::error::Result;
 use crate::heap::HeapConfig;
 use crate::index::IndexFile;
 use crate::io::BlockIo;
-
-use std::io;
 
 pub trait Placement: Sized {
     const WITH_BUCKET: bool;
@@ -16,7 +15,7 @@ pub trait Placement: Sized {
         index: &mut IndexFile,
         registry: Option<&mut PagedFile>,
         created: bool,
-    ) -> io::Result<Self>;
+    ) -> Result<Self>;
 
     fn alloc(
         &mut self,
@@ -26,7 +25,7 @@ pub trait Placement: Sized {
         registry: Option<&mut PagedFile>,
         bucket: u64,
         total_len: u64,
-    ) -> io::Result<(u64, u64)>;
+    ) -> Result<(u64, u64)>;
 
     fn alloc_update(
         &mut self,
@@ -36,7 +35,7 @@ pub trait Placement: Sized {
         registry: Option<&mut PagedFile>,
         bucket: u64,
         total_len: u64,
-    ) -> io::Result<u64>;
+    ) -> Result<u64>;
 
     fn used_bytes(&self) -> u64;
 }

@@ -1,15 +1,14 @@
 use crate::data::PagedFile;
+use crate::error::Result;
 use crate::format::{PAGE_SIZE_U64, SLOT_SIZE, Slot, TOMBSTONE_BIT, page_down};
 use crate::io::{AlignedBuf, BlockIo, ReadReq};
-
-use std::io;
 
 pub struct IndexFile {
     pub paged_file: PagedFile,
 }
 
 impl IndexFile {
-    pub fn stage_slot(&mut self, io: &mut impl BlockIo, id: u64, slot: Slot) -> io::Result<()> {
+    pub fn stage_slot(&mut self, io: &mut impl BlockIo, id: u64, slot: Slot) -> Result<()> {
         let mut buffer = [0u8; SLOT_SIZE];
 
         slot.encode(&mut buffer);
@@ -21,7 +20,7 @@ impl IndexFile {
         io: &mut impl BlockIo,
         id: u64,
         old_slot: Slot,
-    ) -> io::Result<()> {
+    ) -> Result<()> {
         let mut buffer = [0u8; SLOT_SIZE];
 
         Slot {
@@ -32,7 +31,7 @@ impl IndexFile {
         self.paged_file.stage(io, Slot::file_offset(id), &[&buffer])
     }
 
-    pub fn read_slot(&mut self, io: &mut impl BlockIo, id: u64) -> io::Result<Option<Slot>> {
+    pub fn read_slot(&mut self, io: &mut impl BlockIo, id: u64) -> Result<Option<Slot>> {
         let (buffer, buffer_offset) =
             self.paged_file
                 .read_aligned(io, Slot::file_offset(id), SLOT_SIZE as u64)?;
@@ -43,11 +42,7 @@ impl IndexFile {
         Ok(slot)
     }
 
-    pub fn read_slots(
-        &mut self,
-        io: &mut impl BlockIo,
-        ids: &[u64],
-    ) -> io::Result<Vec<Option<Slot>>> {
+    pub fn read_slots(&mut self, io: &mut impl BlockIo, ids: &[u64]) -> Result<Vec<Option<Slot>>> {
         self.paged_file.flush(io)?;
 
         let mut pages: Vec<u64> = ids

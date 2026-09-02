@@ -1,4 +1,5 @@
 use crate::data::{DataFile, PagedFile};
+use crate::error::{HeapError, Result};
 use crate::format::{
     PAGE_SIZE_U64, REGISTRY_ROW_SIZE, RegistryRow, SLOT_SIZE, Slot, page_down, page_up,
 };
@@ -8,8 +9,6 @@ use crate::io::BlockIo;
 use crate::placement::Placement;
 
 use std::collections::HashMap;
-use std::io;
-
 #[derive(Clone, Copy)]
 struct Extent {
     start: u64,
@@ -48,7 +47,7 @@ impl BucketPlacement {
         io: &mut impl BlockIo,
         registry: &mut PagedFile,
         row: RegistryRow,
-    ) -> io::Result<()> {
+    ) -> Result<()> {
         let mut buffer = [0u8; REGISTRY_ROW_SIZE];
 
         row.encode(&mut buffer);
@@ -66,7 +65,7 @@ impl BucketPlacement {
         registry: &mut PagedFile,
         bucket_index: usize,
         need: u64,
-    ) -> io::Result<()> {
+    ) -> Result<()> {
         let extent = loop {
             let grant = self.extent_grant_count;
 
@@ -138,7 +137,7 @@ impl BucketPlacement {
         config: &HeapConfig,
         registry: &mut PagedFile,
         bucket_index: usize,
-    ) -> io::Result<()> {
+    ) -> Result<()> {
         let region = Extent {
             start: self.next_region,
             size: config.region_slots,
@@ -172,7 +171,7 @@ impl BucketPlacement {
         registry: &mut PagedFile,
         bucket: u64,
         need: u64,
-    ) -> io::Result<usize> {
+    ) -> Result<usize> {
         if let Some(&index) = self.bucket_indices.get(&bucket) {
             return Ok(index);
         }
@@ -200,7 +199,7 @@ impl BucketPlacement {
         registry: &mut PagedFile,
         bucket_index: usize,
         total_len: u64,
-    ) -> io::Result<u64> {
+    ) -> Result<u64> {
         let extent = self.states[bucket_index]
             .data
             .last()
@@ -243,7 +242,7 @@ impl Placement for BucketPlacement {
         index: &mut IndexFile,
         registry: Option<&mut PagedFile>,
         created: bool,
-    ) -> io::Result<Self> {
+    ) -> Result<Self> {
         let registry = registry.expect("bucket layout requires registry");
         let mut placement = BucketPlacement {
             states: Vec::new(),
@@ -273,10 +272,10 @@ impl Placement for BucketPlacement {
                         break;
                     }
 
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "invalid registry row",
-                    ));
+                    return Err(HeapError::Corrupt {
+                        what: "registry row",
+                        offset: placement.registry_end,
+                    });
                 };
                 let bucket_index = match placement.bucket_indices.get(&row.bucket) {
                     Some(&index) => index,
@@ -326,10 +325,10 @@ impl Placement for BucketPlacement {
                         });
                     }
                     _ => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "invalid registry row kind",
-                        ));
+                        return Err(HeapError::Corrupt {
+                            what: "registry row kind",
+                            offset: placement.registry_end,
+                        });
                     }
                 }
             }
@@ -379,7 +378,7 @@ impl Placement for BucketPlacement {
         registry: Option<&mut PagedFile>,
         bucket: u64,
         total_len: u64,
-    ) -> io::Result<(u64, u64)> {
+    ) -> Result<(u64, u64)> {
         let registry = registry.expect("bucket layout requires registry");
         let bucket_index = self.bucket_index(
             io,
@@ -417,7 +416,7 @@ impl Placement for BucketPlacement {
         registry: Option<&mut PagedFile>,
         bucket: u64,
         total_len: u64,
-    ) -> io::Result<u64> {
+    ) -> Result<u64> {
         let registry = registry.expect("bucket layout requires registry");
         let bucket_index = self.bucket_index(
             io,

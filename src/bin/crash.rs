@@ -1,3 +1,4 @@
+use heapstore::error::HeapError;
 use heapstore::heap::{Heap, HeapConfig, SyncPolicy};
 use heapstore::io::sync::SyncIo;
 use heapstore::measure::{Csv, OperationStats, median_f64};
@@ -64,7 +65,7 @@ impl LayoutHeap {
         )
     }
 
-    fn read(&mut self, id: u64, out: &mut Vec<u8>) -> std::io::Result<()> {
+    fn read(&mut self, id: u64, out: &mut Vec<u8>) -> Result<(), HeapError> {
         dispatch_heap!(self, heap, heap.read(id, out))
     }
 

@@ -1,4 +1,5 @@
 use super::{BlockIo, IoCounters, ReadReq, WriteReq, fdatasync_counted};
+use crate::error::Result;
 
 use io_uring::{IoUring, opcode, types};
 
@@ -23,7 +24,7 @@ pub struct UringIo {
 }
 
 impl UringIo {
-    pub fn new(depth: u32, chunk: usize) -> io::Result<Self> {
+    pub fn new(depth: u32, chunk: usize) -> Result<Self> {
         let depth = depth.max(1);
 
         Ok(UringIo {
@@ -34,7 +35,7 @@ impl UringIo {
         })
     }
 
-    fn run(&mut self, file: &File, mut segments: Vec<IoSegment>, is_read: bool) -> io::Result<()> {
+    fn run(&mut self, file: &File, mut segments: Vec<IoSegment>, is_read: bool) -> Result<()> {
         let file_descriptor = types::Fd(file.as_raw_fd());
         let mut next = 0usize;
         let mut pending = 0usize;
@@ -73,7 +74,7 @@ impl UringIo {
                     Err(interrupted_error) if interrupted_error.raw_os_error() == Some(4) => {
                         continue;
                     }
-                    Err(e) => return Err(e),
+                    Err(e) => return Err(e.into()),
                 }
             }
 
@@ -144,7 +145,7 @@ impl UringIo {
         }
 
         match error {
-            Some(error) => Err(error),
+            Some(e) => Err(e.into()),
             None => Ok(()),
         }
     }
@@ -166,7 +167,7 @@ impl UringIo {
 }
 
 impl BlockIo for UringIo {
-    fn read_vec(&mut self, file: &File, requests: &mut [ReadReq<'_>]) -> io::Result<()> {
+    fn read_vec(&mut self, file: &File, requests: &mut [ReadReq<'_>]) -> Result<()> {
         let mut segments = Vec::with_capacity(requests.len());
 
         for request in requests {
@@ -181,7 +182,7 @@ impl BlockIo for UringIo {
         self.run(file, segments, true)
     }
 
-    fn write_vec(&mut self, file: &File, requests: &[WriteReq<'_>]) -> io::Result<()> {
+    fn write_vec(&mut self, file: &File, requests: &[WriteReq<'_>]) -> Result<()> {
         let mut segments = Vec::with_capacity(requests.len());
 
         for request in requests {
@@ -196,7 +197,7 @@ impl BlockIo for UringIo {
         self.run(file, segments, false)
     }
 
-    fn sync(&mut self, file: &File) -> io::Result<()> {
+    fn sync(&mut self, file: &File) -> Result<()> {
         fdatasync_counted(file, &mut self.counters)
     }
 
