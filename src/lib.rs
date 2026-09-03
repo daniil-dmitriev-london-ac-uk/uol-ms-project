@@ -17,7 +17,7 @@ pub use bucket::BucketPlacement;
 pub use error::{HeapError, Result};
 pub use heap::{Heap, HeapConfig, HeapStats, SyncPolicy};
 pub use io::{BlockIo, sync::SyncIo, uring::UringIo};
-pub use recovery::RecoveryReport;
+pub use recovery::{RecoveryReport, rebuild};
 pub use rng::{RandomSource, SplitMix64};
 
 pub type SyncAppendHeap = Heap<SyncIo, AppendPlacement>;

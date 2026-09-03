@@ -4,7 +4,7 @@ use crate::format::{SLOT_SIZE, Slot};
 use crate::index::IndexFile;
 use crate::io::BlockIo;
 use crate::placement::Placement;
-use crate::recovery::RecoveryReport;
+use crate::recovery::{RecoveryReport, rebuild};
 
 use std::path::{Path, PathBuf};
 
@@ -65,6 +65,7 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         let data_path = dir.join("data.hs");
         let index_path = dir.join("index.hs");
         let created = !data_path.exists();
+        let mut report = RecoveryReport::default();
         let data_paged_file = if created {
             PagedFile::create(&data_path, b'D', P::LAYOUT, &mut io)?
         } else {
@@ -73,7 +74,18 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         let index_paged_file = if created {
             PagedFile::create(&index_path, b'I', P::LAYOUT, &mut io)?
         } else {
-            PagedFile::open(&index_path, b'I', P::LAYOUT, &mut io)?
+            match PagedFile::open(&index_path, b'I', P::LAYOUT, &mut io) {
+                Ok(file) => file,
+                Err(error) if !P::WITH_BUCKET => {
+                    let _ = error;
+
+                    report.rebuilt = true;
+                    report.rebuild = rebuild(dir, &mut io, P::LAYOUT, config.integrity, &config)?;
+
+                    PagedFile::open(&index_path, b'I', P::LAYOUT, &mut io)?
+                }
+                Err(error) => return Err(error),
+            }
         };
         let registry_path = dir.join("registry.hs");
         let registry = if P::WITH_BUCKET {
@@ -114,9 +126,10 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
                 operations_since_sync: 0,
                 dir: dir.to_path_buf(),
             },
-            RecoveryReport {
-                restored_slots: open_stats.restored,
-                ..RecoveryReport::default()
+            {
+                report.restored_slots = open_stats.restored;
+
+                report
             },
         ))
     }

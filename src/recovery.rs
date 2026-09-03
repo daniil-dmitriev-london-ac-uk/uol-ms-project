@@ -1,9 +1,12 @@
 use crate::crc32::crc32c;
 use crate::data::PagedFile;
-use crate::error::Result;
-use crate::format::{RecordHeader, header_len};
+use crate::error::{HeapError, Result};
+use crate::format::{LAYOUT_BUCKET, PAGE_SIZE_U64, RecordHeader, Slot, header_len};
+use crate::heap::HeapConfig;
 use crate::io::BlockIo;
 
+use std::collections::HashMap;
+use std::path::Path;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct WalkStats {
     pub records: u64,
@@ -74,3 +77,77 @@ pub fn walk(
 
     Ok(stats)
 }
+
+pub fn rebuild(
+    dir: &Path,
+    io: &mut impl BlockIo,
+    layout: u8,
+    integrity: bool,
+    _config: &HeapConfig
+) -> Result<WalkStats> {
+    if layout == LAYOUT_BUCKET {
+        return Err(HeapError::InvalidArg("bucket rebuild is not available"));
+    }
+
+    let mut data_file = PagedFile::open(&dir.join("data.hs"), b'D', layout, io)?;
+    let data_size = data_file.size()?;
+    let header_size = header_len(false) as u64;
+    let mut latest_records: HashMap<u64, (u64, u64, u16)> = HashMap::new();
+
+
+    let stats = walk(
+        io,
+        &mut data_file,
+        false,
+        integrity,
+        PAGE_SIZE_U64,
+        data_size,
+        false,
+        |offset, header, payload_valid| {
+            if payload_valid {
+                let entry = latest_records.entry(header.id).or_insert((
+                    offset,
+                    header_size + header.len,
+                    header.version,
+                ));
+
+                if header.version >= entry.2 {
+                    *entry = (offset, header_size + header.len, header.version);
+                }
+            }
+
+            true
+        }
+    )?;
+
+
+    let mut index_file = crate::index::IndexFile {
+        paged_file: PagedFile::create(&dir.join("index.hs"), b'I', layout, io)?,
+    };
+
+    let mut ids: Vec<u64> = latest_records.keys().copied().collect();
+
+    ids.sort_unstable();
+
+    for id in ids {
+        let (offset, total_len, _) = latest_records[&id];
+        index_file.stage_slot(io, id, Some(Slot { offset, total_len }))?;
+    }
+
+    index_file.paged_file.flush(io)?;
+    io.sync(&index_file.paged_file.file)?;
+
+    Ok(stats)
+
+
+
+
+
+
+
+
+
+}
+
+
+
