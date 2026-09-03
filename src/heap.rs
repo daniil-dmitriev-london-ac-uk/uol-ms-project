@@ -4,6 +4,7 @@ use crate::format::{SLOT_SIZE, Slot};
 use crate::index::IndexFile;
 use crate::io::BlockIo;
 use crate::placement::Placement;
+use crate::recovery::RecoveryReport;
 
 use std::path::{Path, PathBuf};
 
@@ -58,7 +59,7 @@ pub struct Heap<I: BlockIo, P: Placement> {
 }
 
 impl<I: BlockIo, P: Placement> Heap<I, P> {
-    pub fn open(dir: &Path, mut io: I, config: HeapConfig) -> Result<Self> {
+    pub fn open(dir: &Path, mut io: I, config: HeapConfig) -> Result<(Self, RecoveryReport)> {
         std::fs::create_dir_all(dir)?;
 
         let data_path = dir.join("data.hs");
@@ -93,7 +94,7 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
             paged_file: index_paged_file,
         };
         let mut registry = registry;
-        let placement = P::open(
+        let (placement, open_stats) = P::open(
             &mut io,
             &config,
             &mut data,
@@ -102,16 +103,22 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
             created,
         )?;
 
-        Ok(Heap {
-            io,
-            placement,
-            data,
-            index,
-            registry,
-            config,
-            operations_since_sync: 0,
-            dir: dir.to_path_buf(),
-        })
+        Ok((
+            Heap {
+                io,
+                placement,
+                data,
+                index,
+                registry,
+                config,
+                operations_since_sync: 0,
+                dir: dir.to_path_buf(),
+            },
+            RecoveryReport {
+                restored_slots: open_stats.restored,
+                ..RecoveryReport::default()
+            },
+        ))
     }
 
     pub fn insert(&mut self, payload: &[u8]) -> Result<u64> {
@@ -139,10 +146,10 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         self.index.stage_slot(
             &mut self.io,
             id,
-            Slot {
+            Some(Slot {
                 offset: off,
                 total_len: total,
-            },
+            }),
         )?;
 
         self.after_write()?;
@@ -203,10 +210,10 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         self.index.stage_slot(
             &mut self.io,
             id,
-            Slot {
+            Some(Slot {
                 offset: off,
                 total_len: total,
-            },
+            }),
         )?;
 
         self.after_write()

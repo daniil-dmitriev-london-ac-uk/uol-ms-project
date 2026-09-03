@@ -4,6 +4,10 @@ use crate::heap::HeapConfig;
 use crate::index::IndexFile;
 use crate::io::BlockIo;
 
+pub struct OpenStats {
+    pub restored: u64,
+}
+
 pub trait Placement: Sized {
     const WITH_BUCKET: bool;
     const LAYOUT: u8;
@@ -15,7 +19,7 @@ pub trait Placement: Sized {
         index: &mut IndexFile,
         registry: Option<&mut PagedFile>,
         created: bool,
-    ) -> Result<Self>;
+    ) -> Result<(Self, OpenStats)>;
 
     fn alloc(
         &mut self,

@@ -6,7 +6,7 @@ use crate::format::{
 use crate::heap::HeapConfig;
 use crate::index::IndexFile;
 use crate::io::BlockIo;
-use crate::placement::Placement;
+use crate::placement::{OpenStats, Placement};
 
 use std::collections::HashMap;
 #[derive(Clone, Copy)]
@@ -242,7 +242,7 @@ impl Placement for BucketPlacement {
         index: &mut IndexFile,
         registry: Option<&mut PagedFile>,
         created: bool,
-    ) -> Result<Self> {
+    ) -> Result<(Self, OpenStats)> {
         let registry = registry.expect("bucket layout requires registry");
         let mut placement = BucketPlacement {
             states: Vec::new(),
@@ -257,7 +257,7 @@ impl Placement for BucketPlacement {
             data.paged_file
                 .ensure_alloc(config.initial_size, config.growth)?;
 
-            return Ok(placement);
+            return Ok((placement, OpenStats { restored: 0 }));
         }
 
         let registry_size = registry.size()?;
@@ -367,7 +367,7 @@ impl Placement for BucketPlacement {
             id += 1;
         }
 
-        Ok(placement)
+        Ok((placement, OpenStats { restored: 0 }))
     }
 
     fn alloc(

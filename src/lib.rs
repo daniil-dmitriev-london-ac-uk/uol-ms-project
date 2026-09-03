@@ -9,6 +9,7 @@ pub mod index;
 pub mod io;
 pub mod measure;
 pub mod placement;
+pub mod recovery;
 pub mod rng;
 
 pub use append::AppendPlacement;
@@ -16,6 +17,7 @@ pub use bucket::BucketPlacement;
 pub use error::{HeapError, Result};
 pub use heap::{Heap, HeapConfig, HeapStats, SyncPolicy};
 pub use io::{BlockIo, sync::SyncIo, uring::UringIo};
+pub use recovery::RecoveryReport;
 pub use rng::{RandomSource, SplitMix64};
 
 pub type SyncAppendHeap = Heap<SyncIo, AppendPlacement>;

@@ -3,7 +3,7 @@ use heapstore::heap::{Heap, HeapConfig, SyncPolicy};
 use heapstore::io::sync::SyncIo;
 use heapstore::measure::{Csv, OperationStats, median_f64};
 use heapstore::rng::{SplitMix64, payload_for};
-use heapstore::{AppendPlacement, BucketPlacement};
+use heapstore::{AppendPlacement, BucketPlacement, RecoveryReport};
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -44,16 +44,18 @@ macro_rules! dispatch_heap {
 }
 
 impl LayoutHeap {
-    fn open(layout: &str, dir: &Path, config: HeapConfig) -> (LayoutHeap, ()) {
+    fn open(layout: &str, dir: &Path, config: HeapConfig) -> (LayoutHeap, RecoveryReport) {
         match layout {
-            "append" => (
-                LayoutHeap::Append(Heap::open(dir, SyncIo::new(), config).expect("open")),
-                (),
-            ),
-            _ => (
-                LayoutHeap::Bucket(Heap::open(dir, SyncIo::new(), config).expect("open")),
-                (),
-            ),
+            "append" => {
+                let (heap, report) = Heap::open(dir, SyncIo::new(), config).expect("open");
+
+                (LayoutHeap::Append(heap), report)
+            }
+            _ => {
+                let (heap, report) = Heap::open(dir, SyncIo::new(), config).expect("open");
+
+                (LayoutHeap::Bucket(heap), report)
+            }
         }
     }
 

@@ -47,16 +47,16 @@ impl BenchmarkHeap {
 
         match (layout, io) {
             ("append", "sync") => {
-                BenchmarkHeap::SyncAppend(Heap::open(dir, SyncIo::new(), config).expect("open"))
+                BenchmarkHeap::SyncAppend(Heap::open(dir, SyncIo::new(), config).expect("open").0)
             }
             ("bucket", "sync") => {
-                BenchmarkHeap::SyncBucket(Heap::open(dir, SyncIo::new(), config).expect("open"))
+                BenchmarkHeap::SyncBucket(Heap::open(dir, SyncIo::new(), config).expect("open").0)
             }
             ("append", "uring") => {
-                BenchmarkHeap::UringAppend(Heap::open(dir, uring(), config).expect("open"))
+                BenchmarkHeap::UringAppend(Heap::open(dir, uring(), config).expect("open").0)
             }
             ("bucket", "uring") => {
-                BenchmarkHeap::UringBucket(Heap::open(dir, uring(), config).expect("open"))
+                BenchmarkHeap::UringBucket(Heap::open(dir, uring(), config).expect("open").0)
             }
             _ => panic!("unknown combo {layout}/{io}"),
         }
