@@ -66,11 +66,25 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         let index_path = dir.join("index.hs");
         let created = !data_path.exists();
         let mut report = RecoveryReport::default();
+        let registry_path = dir.join("registry.hs");
         let data_paged_file = if created {
             PagedFile::create(&data_path, b'D', P::LAYOUT, &mut io)?
         } else {
             PagedFile::open(&data_path, b'D', P::LAYOUT, &mut io)?
         };
+
+        if !created && P::WITH_BUCKET {
+            let metadata_is_broken = !index_path.exists()
+                || PagedFile::open(&index_path, b'I', P::LAYOUT, &mut io).is_err()
+                || !registry_path.exists()
+                || PagedFile::open(&registry_path, b'R', P::LAYOUT, &mut io).is_err();
+
+            if metadata_is_broken {
+                report.rebuilt = true;
+                report.rebuild = rebuild(dir, &mut io, P::LAYOUT, config.integrity, &config)?;
+            }
+        }
+
         let index_paged_file = if created {
             PagedFile::create(&index_path, b'I', P::LAYOUT, &mut io)?
         } else {
@@ -87,7 +101,6 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
                 Err(error) => return Err(error),
             }
         };
-        let registry_path = dir.join("registry.hs");
         let registry = if P::WITH_BUCKET {
             Some(if created {
                 PagedFile::create(&registry_path, b'R', P::LAYOUT, &mut io)?

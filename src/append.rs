@@ -39,13 +39,13 @@ impl Placement for AppendPlacement {
             ));
         }
 
-        let isize = index.paged_file.size()?;
+        let index_size = index.paged_file.size()?;
         let mut next_id = 0u64;
         let mut max_end = PAGE_SIZE_U64;
         let mut offset = PAGE_SIZE_U64;
 
-        while offset < isize {
-            let chunk_size = (isize - offset).min(1 << 20);
+        while offset < index_size {
+            let chunk_size = (index_size - offset).min(1 << 20);
             let (buffer, buffer_offset) = index.paged_file.read_aligned(io, offset, chunk_size)?;
 
             for (slot_index, chunk) in buffer[buffer_offset..buffer_offset + chunk_size as usize]
