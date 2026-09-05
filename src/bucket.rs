@@ -483,7 +483,6 @@ impl Placement for BucketPlacement {
         total_len: u64,
     ) -> Result<(u64, u64)> {
         let registry = registry.expect("bucket layout requires registry");
-        
         let bucket_index = self.bucket_index(
             io,
             config,
@@ -492,19 +491,17 @@ impl Placement for BucketPlacement {
             bucket,
             required_extent_size(config, total_len),
         )?;
-        
         let offset = self.place_bytes(io, config, data, registry, bucket_index, total_len)?;
-        
-        let region = self.states[bucket_index].slots.last().copied().expect("bucket without region");
-        
+        let region = self.states[bucket_index]
+            .slots
+            .last()
+            .copied()
+            .expect("bucket without region");
         let id = if region.used < region.size {
             self.states[bucket_index].slots.last_mut().unwrap().used += 1;
 
             region.start + region.used
-            
         } else {
-
-
             self.grant_region(io, config, registry, bucket_index)?;
 
             let region = self.states[bucket_index].slots.last_mut().unwrap();
@@ -527,7 +524,10 @@ impl Placement for BucketPlacement {
         total_len: u64,
     ) -> Result<u64> {
         let registry = registry.expect("bucket layout requires registry");
-        let bucket_index = *self.bucket_indices.get(&bucket).ok_or(HeapError::InvalidArg("update refers to unknown bucket"))?;
+        let bucket_index = *self
+            .bucket_indices
+            .get(&bucket)
+            .ok_or(HeapError::InvalidArg("update refers to unknown bucket"))?;
 
         self.place_bytes(io, config, data, registry, bucket_index, total_len)
     }

@@ -215,7 +215,14 @@ pub fn rebuild(
     for id in ids {
         let (offset, record_len, _, _) = latest_records[&id];
 
-        index_file.stage_slot(io, id, Some(Slot { offset, total_len: record_len }))?;
+        index_file.stage_slot(
+            io,
+            id,
+            Some(Slot {
+                offset,
+                total_len: record_len,
+            }),
+        )?;
 
         if index_file.paged_file.pending_bytes() > 4 << 20 {
             index_file.paged_file.flush(io)?;
@@ -235,8 +242,9 @@ pub fn rebuild(
                 kind: b'D',
                 bucket,
                 start: crate::format::page_down(start),
-                size: crate::format::page_up(run_end) - crate::format::page_down(start)
-            }.encode(&mut row_buffer);
+                size: crate::format::page_up(run_end) - crate::format::page_down(start),
+            }
+            .encode(&mut row_buffer);
             registry_file.stage(io, registry_end, &[&row_buffer])?;
             registry_end += REGISTRY_ROW_SIZE as u64;
         }

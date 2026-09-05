@@ -1,6 +1,6 @@
 use crate::data::{DataFile, PagedFile};
 use crate::error::{HeapError, Result};
-use crate::format::{SLOT_SIZE, Slot};
+use crate::format::Slot;
 use crate::index::IndexFile;
 use crate::io::BlockIo;
 use crate::placement::Placement;
@@ -11,17 +11,23 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SyncPolicy {
     None,
+
     EveryN(u32),
 }
 
 #[derive(Debug, Clone)]
 pub struct HeapConfig {
     pub sync_policy: SyncPolicy,
+
     pub integrity: bool,
+
     pub initial_size: u64,
     pub growth: u64,
+
     pub min_extent: u64,
+
     pub region_slots: u64,
+
     pub pending_limit: usize,
 }
 
@@ -54,8 +60,9 @@ pub struct Heap<I: BlockIo, P: Placement> {
     index: IndexFile,
     registry: Option<PagedFile>,
     config: HeapConfig,
-    operations_since_sync: u32,
     dir: PathBuf,
+    operations_since_sync: u32,
+    armed: bool,
 }
 
 impl<I: BlockIo, P: Placement> Heap<I, P> {
@@ -64,51 +71,40 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
 
         let data_path = dir.join("data.hs");
         let index_path = dir.join("index.hs");
+        let registry_path = dir.join("registry.hs");
         let created = !data_path.exists();
         let mut report = RecoveryReport::default();
-        let registry_path = dir.join("registry.hs");
-        let data_paged_file = if created {
-            PagedFile::create(&data_path, b'D', P::LAYOUT, &mut io)?
+        let (data_paged_file, index_paged_file, registry) = if created {
+            (
+                PagedFile::create(&data_path, b'D', P::LAYOUT, &mut io)?,
+                PagedFile::create(&index_path, b'I', P::LAYOUT, &mut io)?,
+                if P::WITH_BUCKET {
+                    Some(PagedFile::create(&registry_path, b'R', P::LAYOUT, &mut io)?)
+                } else {
+                    None
+                },
+            )
         } else {
-            PagedFile::open(&data_path, b'D', P::LAYOUT, &mut io)?
-        };
+            let metadata_is_broken = |p: &Path, kind: u8, io: &mut I| {
+                !p.exists() || PagedFile::open(p, kind, P::LAYOUT, io).is_err()
+            };
 
-        if !created && P::WITH_BUCKET {
-            let metadata_is_broken = !index_path.exists()
-                || PagedFile::open(&index_path, b'I', P::LAYOUT, &mut io).is_err()
-                || !registry_path.exists()
-                || PagedFile::open(&registry_path, b'R', P::LAYOUT, &mut io).is_err();
-
-            if metadata_is_broken {
+            if metadata_is_broken(&index_path, b'I', &mut io)
+                || (P::WITH_BUCKET && metadata_is_broken(&registry_path, b'R', &mut io))
+            {
                 report.rebuilt = true;
                 report.rebuild = rebuild(dir, &mut io, P::LAYOUT, config.integrity, &config)?;
             }
-        }
 
-        let index_paged_file = if created {
-            PagedFile::create(&index_path, b'I', P::LAYOUT, &mut io)?
-        } else {
-            match PagedFile::open(&index_path, b'I', P::LAYOUT, &mut io) {
-                Ok(file) => file,
-                Err(error) if !P::WITH_BUCKET => {
-                    let _ = error;
-
-                    report.rebuilt = true;
-                    report.rebuild = rebuild(dir, &mut io, P::LAYOUT, config.integrity, &config)?;
-
-                    PagedFile::open(&index_path, b'I', P::LAYOUT, &mut io)?
-                }
-                Err(error) => return Err(error),
-            }
-        };
-        let registry = if P::WITH_BUCKET {
-            Some(if created {
-                PagedFile::create(&registry_path, b'R', P::LAYOUT, &mut io)?
-            } else {
-                PagedFile::open(&registry_path, b'R', P::LAYOUT, &mut io)?
-            })
-        } else {
-            None
+            (
+                PagedFile::open(&data_path, b'D', P::LAYOUT, &mut io)?,
+                PagedFile::open(&index_path, b'I', P::LAYOUT, &mut io)?,
+                if P::WITH_BUCKET {
+                    Some(PagedFile::open(&registry_path, b'R', P::LAYOUT, &mut io)?)
+                } else {
+                    None
+                },
+            )
         };
         let mut data = DataFile {
             paged_file: data_paged_file,
@@ -119,14 +115,36 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
             paged_file: index_paged_file,
         };
         let mut registry = registry;
-        let (placement, open_stats) = P::open(
+        let (placement, open_stats) = match P::open(
             &mut io,
             &config,
             &mut data,
             &mut index,
             registry.as_mut(),
             created,
-        )?;
+        ) {
+            Ok(open_result) => open_result,
+            Err(HeapError::Corrupt { .. }) if !created && !report.rebuilt => {
+                report.rebuilt = true;
+                report.rebuild = rebuild(dir, &mut io, P::LAYOUT, config.integrity, &config)?;
+
+                let index_paged_file = PagedFile::open(&index_path, b'I', P::LAYOUT, &mut io)?;
+
+                index = IndexFile {
+                    paged_file: index_paged_file,
+                };
+
+
+                if P::WITH_BUCKET {
+                    registry = Some(PagedFile::open(&registry_path, b'R', P::LAYOUT, &mut io)?);
+                }
+
+                P::open(&mut io, &config, &mut data, &mut index, registry.as_mut(), false)?
+            }
+            Err(error) => return Err(error),
+        };
+
+        report.restored_slots = open_stats.restored;
 
         Ok((
             Heap {
@@ -136,14 +154,11 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
                 index,
                 registry,
                 config,
-                operations_since_sync: 0,
                 dir: dir.to_path_buf(),
+                operations_since_sync: 0,
+                armed: true
             },
-            {
-                report.restored_slots = open_stats.restored;
-
-                report
-            },
+            report,
         ))
     }
 
@@ -161,10 +176,6 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
             bucket,
             total,
         )?;
-
-        self.index
-            .paged_file
-            .ensure_alloc(Slot::file_offset(id) + SLOT_SIZE as u64, 1 << 20)?;
 
         self.data
             .stage_record(&mut self.io, off, bucket, id, 1, payload)?;
@@ -199,7 +210,7 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         let slots = self.index.read_slots(&mut self.io, ids)?;
         let mut items = Vec::with_capacity(ids.len());
 
-        for (&id, slot) in ids.iter().zip(slots) {
+        for (&id, slot) in ids.iter().zip(&slots) {
             let slot = slot.ok_or(HeapError::NotFound(id))?;
 
             items.push((slot.offset, slot.total_len, id));
@@ -260,21 +271,29 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
         self.commit()?;
 
         self.index.paged_file.flush(&mut self.io)?;
-        self.io.sync(&self.index.paged_file.file)
+        self.io.sync(&self.index.paged_file.file)?;
+
+        if let Some(registry_file) = &mut self.registry {
+            self.io.sync(&registry_file.file)?;
+        }
+
+        Ok(())
     }
 
     fn commit(&mut self) -> Result<()> {
-        if let Some(registry) = &mut self.registry {
-            if registry.has_pending() {
-                registry.flush(&mut self.io)?;
-                self.io.sync(&registry.file)?;
+        if let Some(registry_file) = &mut self.registry {
+            if registry_file.has_pending() {
+                registry_file.flush(&mut self.io)?;
+                self.io.sync(&registry_file.file)?;
             }
         }
 
         self.data.paged_file.flush(&mut self.io)?;
         self.io.sync(&self.data.paged_file.file)?;
 
-        self.index.paged_file.flush(&mut self.io)
+        self.index.paged_file.flush(&mut self.io)?;
+
+        Ok(())
     }
 
     fn after_write(&mut self) -> Result<()> {
@@ -286,7 +305,9 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
             }
         }
 
-        if self.pending_bytes() > self.config.pending_limit {
+        if self.data.paged_file.pending_bytes() + self.index.paged_file.pending_bytes()
+            > self.config.pending_limit
+        {
             self.commit()?;
         }
 
@@ -298,41 +319,33 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
     }
 
     pub fn reset_io_counters(&mut self) {
-        self.io.reset_counters();
-    }
-
-    pub fn pending_bytes(&self) -> usize {
-        self.data.paged_file.pending_bytes()
-            + self.index.paged_file.pending_bytes()
-            + self
-                .registry
-                .as_ref()
-                .map(PagedFile::pending_bytes)
-                .unwrap_or(0)
-    }
-
-    pub fn used_bytes(&self) -> u64 {
-        self.placement.used_bytes()
+        self.io.reset_counters()
     }
 
     pub fn stats(&self) -> HeapStats {
-        let size = |file: &PagedFile| file.size().unwrap_or(0);
+        let file_size = |paged_file: &PagedFile| paged_file.size().unwrap_or(0);
 
         HeapStats {
-            data_file_bytes: size(&self.data.paged_file),
+            data_file_bytes: file_size(&self.data.paged_file),
             data_used_bytes: self.placement.used_bytes(),
-            index_file_bytes: size(&self.index.paged_file),
-            registry_file_bytes: self.registry.as_ref().map(&size).unwrap_or(0),
+            index_file_bytes: file_size(&self.index.paged_file),
+            registry_file_bytes: self.registry.as_ref().map(&file_size).unwrap_or(0),
         }
     }
 
     pub fn dir(&self) -> &Path {
         &self.dir
     }
+
+    pub fn simulate_crash(mut self) {
+        self.armed = false;
+    }
 }
 
 impl<I: BlockIo, P: Placement> Drop for Heap<I, P> {
     fn drop(&mut self) {
-        let _ = self.flush();
+        if self.armed {
+            let _ = self.flush();
+        }
     }
 }
