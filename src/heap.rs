@@ -133,13 +133,18 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
                 index = IndexFile {
                     paged_file: index_paged_file,
                 };
-
-
                 if P::WITH_BUCKET {
                     registry = Some(PagedFile::open(&registry_path, b'R', P::LAYOUT, &mut io)?);
                 }
 
-                P::open(&mut io, &config, &mut data, &mut index, registry.as_mut(), false)?
+                P::open(
+                    &mut io,
+                    &config,
+                    &mut data,
+                    &mut index,
+                    registry.as_mut(),
+                    false,
+                )?
             }
             Err(error) => return Err(error),
         };
@@ -156,7 +161,7 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
                 config,
                 dir: dir.to_path_buf(),
                 operations_since_sync: 0,
-                armed: true
+                armed: true,
             },
             report,
         ))

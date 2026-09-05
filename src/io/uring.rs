@@ -1,10 +1,9 @@
 use super::{BlockIo, IoCounters, ReadReq, WriteReq, fdatasync_counted};
-use crate::error::Result;
+use crate::error::{HeapError, Result};
 
 use io_uring::{IoUring, opcode, types};
 
 use std::fs::File;
-use std::io;
 use std::os::unix::io::AsRawFd;
 
 pub const DEFAULT_DEPTH: u32 = 32;
@@ -39,7 +38,7 @@ impl UringIo {
         let file_descriptor = types::Fd(file.as_raw_fd());
         let mut next = 0usize;
         let mut pending = 0usize;
-        let mut error: Option<io::Error> = None;
+        let mut error: Option<HeapError> = None;
 
         while next < segments.len() || pending > 0 {
             while pending < self.depth && next < segments.len() && error.is_none() {
@@ -71,10 +70,18 @@ impl UringIo {
             loop {
                 match self.ring.submit_and_wait(1) {
                     Ok(_) => break,
-                    Err(interrupted_error) if interrupted_error.raw_os_error() == Some(4) => {
+                    Err(interrupted_error)
+                        if interrupted_error.raw_os_error() == Some(libc::EINTR) =>
+                    {
                         continue;
                     }
-                    Err(e) => return Err(e.into()),
+                    Err(submit_error) => {
+                        eprintln!(
+                            "io_uring submit failed with {pending} in flight: {submit_error}"
+                        );
+
+                        std::process::abort();
+                    }
                 }
             }
 
@@ -91,7 +98,7 @@ impl UringIo {
 
                 if completion_result < 0 {
                     if error.is_none() {
-                        error = Some(io::Error::from_raw_os_error(-completion_result));
+                        error = Some(std::io::Error::from_raw_os_error(-completion_result).into());
                     }
                     continue;
                 }
@@ -116,7 +123,9 @@ impl UringIo {
                 }
 
                 if !is_read && completed_bytes == 0 {
-                    error = Some(io::ErrorKind::WriteZero.into());
+                    if error.is_none() {
+                        error = Some(HeapError::Io(std::io::ErrorKind::WriteZero.into()));
+                    }
                     continue;
                 }
 
@@ -145,7 +154,7 @@ impl UringIo {
         }
 
         match error {
-            Some(e) => Err(e.into()),
+            Some(error) => Err(error),
             None => Ok(()),
         }
     }
@@ -170,7 +179,7 @@ impl BlockIo for UringIo {
     fn read_vec(&mut self, file: &File, requests: &mut [ReadReq<'_>]) -> Result<()> {
         let mut segments = Vec::with_capacity(requests.len());
 
-        for request in requests {
+        for request in requests.iter_mut() {
             self.split(
                 request.off,
                 request.buf.as_mut_ptr(),
@@ -185,7 +194,7 @@ impl BlockIo for UringIo {
     fn write_vec(&mut self, file: &File, requests: &[WriteReq<'_>]) -> Result<()> {
         let mut segments = Vec::with_capacity(requests.len());
 
-        for request in requests {
+        for request in requests.iter() {
             self.split(
                 request.off,
                 request.buf.as_ptr() as *mut u8,

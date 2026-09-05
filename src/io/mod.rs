@@ -6,7 +6,6 @@ use crate::format::PAGE;
 
 use std::alloc::{Layout, alloc_zeroed, dealloc};
 use std::fs::File;
-use std::io;
 use std::ops::{Deref, DerefMut};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
@@ -21,16 +20,16 @@ unsafe impl Send for AlignedBuf {}
 
 impl AlignedBuf {
     pub fn zeroed(len: usize) -> Self {
-        let mut buf = AlignedBuf {
+        let mut buffer = AlignedBuf {
             ptr: std::ptr::null_mut(),
             len: 0,
             capacity: 0,
         };
 
-        buf.reserve(len);
-        buf.len = len;
+        buffer.reserve(len);
+        buffer.len = len;
 
-        buf
+        buffer
     }
 
     pub fn reserve(&mut self, need: usize) {
@@ -63,10 +62,12 @@ impl AlignedBuf {
         }
     }
 
-    pub fn extend_from_slice(&mut self, data: &[u8]) {
-        self.reserve(self.len + data.len());
-        unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), self.ptr.add(self.len), data.len()) };
-        self.len += data.len();
+    pub fn extend_from_slice(&mut self, bytes: &[u8]) {
+        self.reserve(self.len + bytes.len());
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), self.ptr.add(self.len), bytes.len())
+        };
+        self.len += bytes.len();
     }
 
     pub fn resize_zeroed(&mut self, len: usize) {
@@ -94,7 +95,6 @@ impl Drop for AlignedBuf {
 
 impl Deref for AlignedBuf {
     type Target = [u8];
-
     fn deref(&self) -> &[u8] {
         if self.ptr.is_null() {
             return &[];
@@ -136,6 +136,7 @@ pub struct WriteReq<'a> {
 pub trait BlockIo {
     fn read_vec(&mut self, file: &File, requests: &mut [ReadReq<'_>]) -> Result<()>;
     fn write_vec(&mut self, file: &File, requests: &[WriteReq<'_>]) -> Result<()>;
+
     fn sync(&mut self, file: &File) -> Result<()>;
     fn counters(&self) -> IoCounters;
     fn reset_counters(&mut self);
@@ -159,7 +160,7 @@ pub fn fdatasync_counted(file: &File, counters: &mut IoCounters) -> Result<()> {
     let result_code = unsafe { libc::fdatasync(file.as_raw_fd()) };
 
     if result_code != 0 {
-        return Err(io::Error::last_os_error().into());
+        return Err(std::io::Error::last_os_error().into());
     }
 
     counters.syncs += 1;
@@ -173,7 +174,7 @@ pub fn fallocate(file: &File, offset: u64, len: u64) -> Result<()> {
     let result_code = unsafe { libc::fallocate(file.as_raw_fd(), 0, offset as i64, len as i64) };
 
     if result_code != 0 {
-        return Err(io::Error::last_os_error().into());
+        return Err(std::io::Error::last_os_error().into());
     }
 
     Ok(())

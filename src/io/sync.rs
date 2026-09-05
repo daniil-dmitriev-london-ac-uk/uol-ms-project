@@ -2,7 +2,6 @@ use super::{BlockIo, IoCounters, ReadReq, WriteReq, fdatasync_counted};
 use crate::error::Result;
 
 use std::fs::File;
-use std::io;
 use std::os::unix::fs::FileExt;
 
 #[derive(Default)]
@@ -49,7 +48,7 @@ impl BlockIo for SyncIo {
                     file.write_at(&request.buf[done..], request.off + done as u64)?;
 
                 if processed_bytes == 0 {
-                    return Err(io::Error::from(io::ErrorKind::WriteZero).into());
+                    return Err(std::io::Error::from(std::io::ErrorKind::WriteZero).into());
                 }
 
                 self.counters.writes += 1;
