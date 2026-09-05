@@ -230,3 +230,65 @@ pub(super) fn crc_speed(args: &Args, csv: &mut Csv) {
 
     let _ = args;
 }
+
+pub(super) fn recovery_time(args: &Args, csv: &mut Csv) {
+    for layout in ["append", "bucket"] {
+        
+        for count in [10_000u64, 50_000, 200_000, 500_000] {
+            let dir = args.data.join("bench-data").join("rec-store");
+            let _ = std::fs::remove_dir_all(&dir);
+
+            {
+                let (mut heap, _) = LayoutHeap::open(layout, &dir, heap_config(SyncPolicy::None, true));
+                let payload = make_payload(3, 1024);
+
+                for key in 0..count {
+                    heap.insert_into(key % BUCKET_COUNT, &payload);
+                }
+
+                heap.flush();
+            }
+
+            let started = Instant::now();
+            let (heap, _) = LayoutHeap::open(layout, &dir, heap_config(SyncPolicy::None, true));
+            let clean_open_ms = started.elapsed().as_millis();
+
+            drop(heap);
+
+            std::fs::remove_file(dir.join("index.hs")).unwrap();
+
+            if layout == "bucket" {
+                let _ = std::fs::remove_file(dir.join("registry.hs"));
+            }
+
+            let started = Instant::now();
+            let (_heap, recovery_report) = LayoutHeap::open(layout, &dir, heap_config(SyncPolicy::None, true));
+            let rebuild_ms = started.elapsed().as_millis();
+            let bytes = count * (1024 + if layout == "bucket" { 38 } else { 30 });
+
+            csv.row(&[
+                layout.into(),
+                count.to_string(),
+                bytes.to_string(),
+                clean_open_ms.to_string(),
+                rebuild_ms.to_string(),
+                format!("{:.1}", bytes as f64 / 1e6 / (rebuild_ms as f64 / 1000.0)),
+                recovery_report.rebuild.records.to_string(),
+            ]).unwrap();
+
+            println!( "recovery {layout} n={count}: clean open {clean_open_ms}ms, rebuild {rebuild_ms}ms");
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+
+    }
+
+
+
+}
+
+
+
+
+

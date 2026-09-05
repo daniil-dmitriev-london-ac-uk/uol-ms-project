@@ -154,8 +154,18 @@ fn main() {
 
             costs::crc_speed(&args, &mut csv);
         }
+        "recovery-time" => {
+            let mut csv = Csv::open(
+                &args.out.join("recovery_time.csv"),
+                "layout,records,bytes,clean_open_ms,rebuild_ms,mb_per_s,rebuilt_records"
+            ).unwrap();
+
+            costs::recovery_time(&args, &mut csv);
+        }
         _ => {
-            eprintln!("commands: cost-sync | cost-integrity | sync-shape | crc-speed");
+            eprintln!(
+                "commands: cost-sync | cost-integrity | sync-shape | crc-speed | recovery-time"
+            );
 
             std::process::exit(2);
         }
