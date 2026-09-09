@@ -85,8 +85,8 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
                 },
             )
         } else {
-            let metadata_is_broken = |p: &Path, kind: u8, io: &mut I| {
-                !p.exists() || PagedFile::open(p, kind, P::LAYOUT, io).is_err()
+            let metadata_is_broken = |path: &Path, kind: u8, io: &mut I| {
+                !path.exists() || PagedFile::open(path, kind, P::LAYOUT, io).is_err()
             };
 
             if metadata_is_broken(&index_path, b'I', &mut io)

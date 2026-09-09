@@ -157,8 +157,9 @@ fn main() {
         "recovery-time" => {
             let mut csv = Csv::open(
                 &args.out.join("recovery_time.csv"),
-                "layout,records,bytes,clean_open_ms,rebuild_ms,mb_per_s,rebuilt_records"
-            ).unwrap();
+                "layout,records,bytes,clean_open_ms,rebuild_ms,mb_per_s,rebuilt_records",
+            )
+            .unwrap();
 
             costs::recovery_time(&args, &mut csv);
         }
