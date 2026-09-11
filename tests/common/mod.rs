@@ -7,9 +7,6 @@ use heapstore::rng::payload_for;
 
 use std::path::PathBuf;
 
-
-
-
 pub const SEED: u64 = 0x5EED_2026;
 
 pub fn test_dir(name: &str) -> PathBuf {
@@ -35,12 +32,10 @@ pub fn sync_io() -> SyncIo {
     SyncIo::new()
 }
 
-
 #[allow(dead_code)]
 pub fn uring_io() -> UringIo {
     UringIo::new(32, 512 << 10).expect("io_uring is unavailable")
 }
-
 
 pub fn make_payload(key: u64, len: usize) -> Vec<u8> {
     let mut payload = Vec::new();
@@ -50,18 +45,16 @@ pub fn make_payload(key: u64, len: usize) -> Vec<u8> {
     payload
 }
 
-
-
-pub fn assert_record<I: BlockIo, P: Placement>(heap: &mut Heap<I, P>, id: u64, key: u64, len: usize) {
+pub fn assert_record<I: BlockIo, P: Placement>(
+    heap: &mut Heap<I, P>,
+    id: u64,
+    key: u64,
+    len: usize,
+) {
     let mut out = Vec::new();
 
-    heap.read(id, &mut out).unwrap_or_else(|error| panic!("read {id}: {error}"));
+    heap.read(id, &mut out)
+        .unwrap_or_else(|error| panic!("read {id}: {error}"));
 
     assert_eq!(out, make_payload(key, len), "payload mismatch for id {id}");
 }
-
-
-
-
-
-

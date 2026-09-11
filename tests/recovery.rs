@@ -11,11 +11,6 @@ use heapstore::recovery::rebuild;
 
 use std::io::{Read, Seek, SeekFrom, Write};
 
-
-
-
-
-
 fn raw_slot(dir: &std::path::Path, id: u64) -> Option<Slot> {
     let mut file = std::fs::File::open(dir.join("index.hs")).unwrap();
 
@@ -28,10 +23,11 @@ fn raw_slot(dir: &std::path::Path, id: u64) -> Option<Slot> {
     Slot::decode(&bytes)
 }
 
-
-
 fn zero_slots(dir: &std::path::Path, ids: &[u64]) {
-    let mut file = std::fs::OpenOptions::new().write(true).open(dir.join("index.hs")).unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(dir.join("index.hs"))
+        .unwrap();
 
     for &id in ids {
         file.seek(SeekFrom::Start(Slot::file_offset(id))).unwrap();
@@ -41,10 +37,13 @@ fn zero_slots(dir: &std::path::Path, ids: &[u64]) {
     file.sync_all().unwrap();
 }
 
-
-
 fn flip_byte(dir: &std::path::Path, offset: u64) {
-    let mut file = std::fs::OpenOptions::new().read(true).write(true).open(dir.join("data.hs")).unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(dir.join("data.hs"))
+        .unwrap();
+
     file.seek(SeekFrom::Start(offset)).unwrap();
 
     let mut bytes = [0u8; 1];
@@ -54,8 +53,6 @@ fn flip_byte(dir: &std::path::Path, offset: u64) {
     file.write_all(&[bytes[0] ^ 0xFF]).unwrap();
     file.sync_all().unwrap();
 }
-
-
 
 fn tail_restore<P: Placement>(name: &str) {
     let dir = test_dir(name);
@@ -83,18 +80,15 @@ fn tail_restore<P: Placement>(name: &str) {
     }
 }
 
-
 #[test]
 fn tail_restore_append() {
     tail_restore::<AppendPlacement>("tail-append");
 }
 
-
 #[test]
 fn tail_restore_bucket() {
     tail_restore::<BucketPlacement>("tail-bucket");
 }
-
 
 #[test]
 fn corrupt_payload_detected_and_localized() {
@@ -102,7 +96,8 @@ fn corrupt_payload_detected_and_localized() {
     let record_count = 20u64;
 
     {
-        let (mut heap, _) = Heap::<_, AppendPlacement>::open(&dir, sync_io(), small_config()).unwrap();
+        let (mut heap, _) =
+            Heap::<_, AppendPlacement>::open(&dir, sync_io(), small_config()).unwrap();
 
         for key in 0..record_count {
             heap.insert(&make_payload(key, 2000)).unwrap();
@@ -117,10 +112,14 @@ fn corrupt_payload_detected_and_localized() {
     flip_byte(&dir, slot.offset + 30 + 100);
 
     {
-        let (mut heap, _) = Heap::<_, AppendPlacement>::open(&dir, sync_io(), small_config()).unwrap();
+        let (mut heap, _) =
+            Heap::<_, AppendPlacement>::open(&dir, sync_io(), small_config()).unwrap();
         let mut out = Vec::new();
 
-        assert!(matches!(heap.read(victim, &mut out), Err(HeapError::Corrupt { .. })));
+        assert!(matches!(
+            heap.read(victim, &mut out),
+            Err(HeapError::Corrupt { .. })
+        ));
 
         assert_record(&mut heap, victim + 1, victim + 1, 2000);
     }
@@ -133,16 +132,15 @@ fn corrupt_payload_detected_and_localized() {
 
     let (mut heap, _) = Heap::<_, AppendPlacement>::open(&dir, sync_io(), small_config()).unwrap();
 
-    assert!(matches!(heap.read(victim, &mut Vec::new()), Err(HeapError::NotFound(_))));
+    assert!(matches!(
+        heap.read(victim, &mut Vec::new()),
+        Err(HeapError::NotFound(_))
+    ));
 
     for key in (0..record_count).filter(|&key| key != victim) {
         assert_record(&mut heap, key, key, 2000);
     }
-
-
 }
-
-
 
 #[test]
 fn corrupt_header_resyncs() {
@@ -150,7 +148,8 @@ fn corrupt_header_resyncs() {
     let record_count = 30u64;
 
     {
-        let (mut heap, _) = Heap::<_, AppendPlacement>::open(&dir, sync_io(), small_config()).unwrap();
+        let (mut heap, _) =
+            Heap::<_, AppendPlacement>::open(&dir, sync_io(), small_config()).unwrap();
 
         for key in 0..record_count {
             heap.insert(&make_payload(key, 500)).unwrap();
@@ -175,9 +174,11 @@ fn corrupt_header_resyncs() {
         assert_record(&mut heap, key, key, 500);
     }
 
-    assert!(matches!(heap.read(10, &mut Vec::new()), Err(HeapError::NotFound(_))));
+    assert!(matches!(
+        heap.read(10, &mut Vec::new()),
+        Err(HeapError::NotFound(_))
+    ));
 }
-
 
 #[test]
 fn truncated_tail() {
@@ -185,7 +186,8 @@ fn truncated_tail() {
     let record_count = 12u64;
 
     {
-        let (mut heap, _) = Heap::<_, AppendPlacement>::open(&dir, sync_io(), small_config()).unwrap();
+        let (mut heap, _) =
+            Heap::<_, AppendPlacement>::open(&dir, sync_io(), small_config()).unwrap();
 
         for key in 0..record_count {
             heap.insert(&make_payload(key, 3000)).unwrap();
@@ -195,10 +197,13 @@ fn truncated_tail() {
     }
 
     let last_slot = raw_slot(&dir, record_count - 1).unwrap();
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(dir.join("data.hs"))
+        .unwrap();
 
-    let file = std::fs::OpenOptions::new().write(true).open(dir.join("data.hs")).unwrap();
-
-    file.set_len(last_slot.offset + last_slot.total_len / 2).unwrap();
+    file.set_len(last_slot.offset + last_slot.total_len / 2)
+        .unwrap();
 
     drop(file);
 
@@ -213,7 +218,6 @@ fn truncated_tail() {
         assert_record(&mut heap, key, key, 3000);
     }
 }
-
 
 fn index_loss<P: Placement>(name: &str) {
     let dir = test_dir(name);
@@ -247,6 +251,7 @@ fn index_loss<P: Placement>(name: &str) {
     for (key, &id) in ids.iter().enumerate() {
         match key {
             4 => assert_record(&mut heap, id, 9005, 300),
+
             9 => assert_record(&mut heap, id, 9, 800),
             _ => assert_record(&mut heap, id, key as u64, 800),
         }
@@ -255,22 +260,19 @@ fn index_loss<P: Placement>(name: &str) {
     let id = heap.insert_into(1, &make_payload(7777, 640)).unwrap();
 
     assert!(!ids.contains(&id));
+
     assert_record(&mut heap, id, 7777, 640);
 }
-
-
 
 #[test]
 fn index_loss_append() {
     index_loss::<AppendPlacement>("idxloss-append");
 }
 
-
 #[test]
 fn index_loss_bucket() {
     index_loss::<BucketPlacement>("idxloss-bucket");
 }
-
 
 #[test]
 fn group_sync_loses_at_most_n_minus_1() {
@@ -280,9 +282,9 @@ fn group_sync_loses_at_most_n_minus_1() {
         ..small_config()
     };
 
-
     {
-        let (mut heap, _) = Heap::<_, AppendPlacement>::open(&dir, sync_io(), config.clone()).unwrap();
+        let (mut heap, _) =
+            Heap::<_, AppendPlacement>::open(&dir, sync_io(), config.clone()).unwrap();
 
         for key in 0..6u64 {
             heap.insert(&make_payload(key, 900)).unwrap();
@@ -291,7 +293,6 @@ fn group_sync_loses_at_most_n_minus_1() {
         heap.simulate_crash();
     }
 
-
     let (mut heap, _) = Heap::<_, AppendPlacement>::open(&dir, sync_io(), config).unwrap();
 
     for key in 0..4u64 {
@@ -299,21 +300,9 @@ fn group_sync_loses_at_most_n_minus_1() {
     }
 
     for key in 4..6u64 {
-        assert!(matches!(heap.read(key, &mut Vec::new()), Err(HeapError::NotFound(_))));
+        assert!(matches!(
+            heap.read(key, &mut Vec::new()),
+            Err(HeapError::NotFound(_))
+        ));
     }
-
-
-
-
-
-
-
 }
-
-
-
-
-
-
-
-

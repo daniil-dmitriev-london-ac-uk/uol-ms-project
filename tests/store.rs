@@ -8,16 +8,13 @@ use heapstore::heap::Heap;
 use heapstore::io::BlockIo;
 use heapstore::placement::Placement;
 
-
-
-
-
 fn roundtrip<I: BlockIo, P: Placement>(name: &str, make_io: impl Fn() -> I) {
     let dir = test_dir(name);
     let mut keys: Vec<(u64, u64, usize)> = Vec::new();
 
     {
-        let (mut heap, recovery_report) = Heap::<I, P>::open(&dir, make_io(), small_config()).unwrap();
+        let (mut heap, recovery_report) =
+            Heap::<I, P>::open(&dir, make_io(), small_config()).unwrap();
 
         assert!(!recovery_report.rebuilt);
 
@@ -58,8 +55,14 @@ fn roundtrip<I: BlockIo, P: Placement>(name: &str, make_io: impl Fn() -> I) {
 
         heap.delete(deleted_id).unwrap();
 
-        assert!(matches!(heap.read(deleted_id, &mut Vec::new()), Err(HeapError::NotFound(_))));
-        assert!(matches!(heap.delete(deleted_id), Err(HeapError::NotFound(_))));
+        assert!(matches!(
+            heap.read(deleted_id, &mut Vec::new()),
+            Err(HeapError::NotFound(_))
+        ));
+        assert!(matches!(
+            heap.delete(deleted_id),
+            Err(HeapError::NotFound(_))
+        ));
 
         heap.flush().unwrap();
 
@@ -79,7 +82,10 @@ fn roundtrip<I: BlockIo, P: Placement>(name: &str, make_io: impl Fn() -> I) {
 
     let id = heap.insert_into(2, &make_payload(5000, 700)).unwrap();
 
-    assert!(keys.iter().all(|entry| entry.0 != id), "record id was reused");
+    assert!(
+        keys.iter().all(|entry| entry.0 != id),
+        "record id was reused"
+    );
 
     assert_record(&mut heap, id, 5000, 700);
 }
@@ -118,13 +124,12 @@ fn big_records<I: BlockIo, P: Placement>(name: &str, make_io: impl Fn() -> I) {
     assert_record(&mut heap, small_id, 3, 10);
 
     let mut out = Vec::new();
-    heap.read_batch(&[small_id, big_id, medium_id], &mut out).unwrap();
+
+    heap.read_batch(&[small_id, big_id, medium_id], &mut out)
+        .unwrap();
 
     assert_eq!(out[1].len(), 5 << 20);
-
 }
-
-
 
 #[test]
 fn big_records_all_paths() {
@@ -140,24 +145,29 @@ fn drive<I: BlockIo, P: Placement>(dir: &std::path::Path, io: I) {
 
     for key in 0..40u64 {
         ids.push(
-            heap.insert_into(key % 3, &make_payload(key, 50 + (key as usize * 101) % 9000)).unwrap()
+            heap.insert_into(
+                key % 3,
+                &make_payload(key, 50 + (key as usize * 101) % 9000),
+            )
+            .unwrap(),
         );
     }
 
     for (index, &id) in ids.iter().enumerate().filter(|(index, _)| index % 7 == 0) {
-        heap.update(id, &make_payload(1000 + index as u64, 333)).unwrap();
+        heap.update(id, &make_payload(1000 + index as u64, 333))
+            .unwrap();
     }
 
     heap.delete(ids[13]).unwrap();
+
     heap.flush().unwrap();
-
-
 }
 
-
-
 fn parity<P: Placement>(name: &str) {
-    let (sync_dir, uring_dir) = (test_dir(&format!("{name}-s")), test_dir(&format!("{name}-u")));
+    let (sync_dir, uring_dir) = (
+        test_dir(&format!("{name}-s")),
+        test_dir(&format!("{name}-u")),
+    );
 
     drive::<_, P>(&sync_dir, sync_io());
     drive::<_, P>(&uring_dir, uring_io());
@@ -166,13 +176,12 @@ fn parity<P: Placement>(name: &str) {
         let sync_bytes = std::fs::read(sync_dir.join(file_name)).unwrap();
         let uring_bytes = std::fs::read(uring_dir.join(file_name)).unwrap();
 
-        assert_eq!(sync_bytes, uring_bytes, "{file_name} differs between sync and io_uring");
+        assert_eq!(
+            sync_bytes, uring_bytes,
+            "{file_name} differs between sync and io_uring"
+        );
     }
-
-
 }
-
-
 
 #[test]
 fn sync_uring_parity() {
@@ -186,65 +195,84 @@ fn bucket_grouped_reads_are_contiguous() {
     let len = 3000usize;
     let bucket_dir = test_dir("contig-bucket");
     let append_dir = test_dir("contig-append");
-    let (mut bucket_heap, _) = Heap::<_, BucketPlacement>::open(&bucket_dir, sync_io(), small_config()).unwrap();
-    let (mut append_heap, _) = Heap::<_, AppendPlacement>::open(&append_dir, sync_io(), small_config()).unwrap();
+    let (mut bucket_heap, _) =
+        Heap::<_, BucketPlacement>::open(&bucket_dir, sync_io(), small_config()).unwrap();
+    let (mut append_heap, _) =
+        Heap::<_, AppendPlacement>::open(&append_dir, sync_io(), small_config()).unwrap();
     let mut bucket_ids = Vec::new();
     let mut append_ids = Vec::new();
 
-
-
     for key in 0..64u64 {
         bucket_ids.push(
-            bucket_heap.insert_into(key % bucket_count, &make_payload(key, len)).unwrap()
+            bucket_heap
+                .insert_into(key % bucket_count, &make_payload(key, len))
+                .unwrap(),
         );
         append_ids.push(
-            append_heap.insert_into(key % bucket_count, &make_payload(key, len)).unwrap()
+            append_heap
+                .insert_into(key % bucket_count, &make_payload(key, len))
+                .unwrap(),
         );
     }
 
     bucket_heap.flush().unwrap();
     append_heap.flush().unwrap();
 
-    let group: Vec<usize> = (0..64).filter(|key| key % bucket_count as usize == 1).collect();
-
+    let group: Vec<usize> = (0..64)
+        .filter(|key| key % bucket_count as usize == 1)
+        .collect();
     let bucket_group_ids: Vec<u64> = group.iter().map(|&key| bucket_ids[key]).collect();
     let append_group_ids: Vec<u64> = group.iter().map(|&key| append_ids[key]).collect();
     let mut out = Vec::new();
 
     bucket_heap.reset_io_counters();
+
     bucket_heap.read_batch(&bucket_group_ids, &mut out).unwrap();
 
     let bucket_counters = bucket_heap.io_counters();
 
     append_heap.reset_io_counters();
+
     append_heap.read_batch(&append_group_ids, &mut out).unwrap();
 
-    
     let append_counters = append_heap.io_counters();
 
-
-    assert!(bucket_counters.reads <= 4, "bucket reads should merge into a few requests, got {}", bucket_counters.reads);
-    assert!(append_counters.reads >= group.len() as u64, "append records are scattered, expected at least {} reads, got {}", group.len(), append_counters.reads);
+    assert!(
+        bucket_counters.reads <= 4,
+        "bucket reads should merge into a few requests, got {}",
+        bucket_counters.reads
+    );
+    assert!(
+        append_counters.reads >= group.len() as u64,
+        "append records are scattered, expected at least {} reads, got {}",
+        group.len(),
+        append_counters.reads
+    );
     assert!(append_counters.read_bytes > bucket_counters.read_bytes);
 }
-
-
 
 #[test]
 fn write_amplification_shape() {
     let append_dir = test_dir("wa-append");
     let bucket_dir = test_dir("wa-bucket");
-    let (mut append_heap, _) = Heap::<_, AppendPlacement>::open(&append_dir, sync_io(), small_config()).unwrap();
-    let (mut bucket_heap, _) = Heap::<_, BucketPlacement>::open(&bucket_dir, sync_io(), small_config()).unwrap();
+    let (mut append_heap, _) =
+        Heap::<_, AppendPlacement>::open(&append_dir, sync_io(), small_config()).unwrap();
+    let (mut bucket_heap, _) =
+        Heap::<_, BucketPlacement>::open(&bucket_dir, sync_io(), small_config()).unwrap();
 
     append_heap.flush().unwrap();
     bucket_heap.flush().unwrap();
+
     append_heap.reset_io_counters();
     bucket_heap.reset_io_counters();
 
     for key in 0..10u64 {
-        append_heap.insert_into(key, &make_payload(key, 200)).unwrap();
-        bucket_heap.insert_into(key, &make_payload(key, 200)).unwrap();
+        append_heap
+            .insert_into(key, &make_payload(key, 200))
+            .unwrap();
+        bucket_heap
+            .insert_into(key, &make_payload(key, 200))
+            .unwrap();
     }
 
     append_heap.flush().unwrap();
@@ -252,7 +280,10 @@ fn write_amplification_shape() {
 
     let (append_counters, bucket_counters) = (append_heap.io_counters(), bucket_heap.io_counters());
 
-    assert!(bucket_counters.write_bytes >= append_counters.write_bytes * 3, "append {append_counters:?}, bucket {bucket_counters:?}");
+    assert!(
+        bucket_counters.write_bytes >= append_counters.write_bytes * 3,
+        "append {append_counters:?}, bucket {bucket_counters:?}"
+    );
 }
 
 fn update_survives_reopen_and_insert<P: Placement>(name: &str) {
@@ -260,35 +291,32 @@ fn update_survives_reopen_and_insert<P: Placement>(name: &str) {
 
     {
         let (mut heap, _) = Heap::<_, P>::open(&dir, sync_io(), small_config()).unwrap();
+
         heap.insert_into(0, &make_payload(0, 500)).unwrap();
         heap.insert_into(1, &make_payload(1, 500)).unwrap();
+
         heap.update(0, &make_payload(100, 700)).unwrap();
+
         heap.flush().unwrap();
     }
 
-    
     let (mut heap, recovery_report) = Heap::<_, P>::open(&dir, sync_io(), small_config()).unwrap();
+
     assert_eq!(recovery_report.restored_slots, 0, "{recovery_report:?}");
 
-
     let id2 = heap.insert_into(0, &make_payload(2, 500)).unwrap();
+
     heap.flush().unwrap();
+
     assert_record(&mut heap, 0, 100, 700);
     assert_record(&mut heap, id2, 2, 500);
 
-    
     drop(heap);
 
     let (mut heap, _) = Heap::<_, P>::open(&dir, sync_io(), small_config()).unwrap();
+
     assert_record(&mut heap, 0, 100, 700);
-
-
-
-
 }
-
-
-
 
 #[test]
 fn update_survives_reopen_append() {
@@ -308,13 +336,16 @@ fn interleaved_bucket_writes_batch_in_staging() {
     let per_bucket = 12u64;
 
     for bucket in 0..buckets {
-        heap.insert_into(bucket, &make_payload(bucket, 200)).unwrap();
+        heap.insert_into(bucket, &make_payload(bucket, 200))
+            .unwrap();
     }
 
     heap.flush().unwrap();
+
     heap.reset_io_counters();
 
     let mut ids = Vec::new();
+
     for key in 0..buckets * per_bucket {
         ids.push(
             heap.insert_into(key % buckets, &make_payload(100 + key, 200))
@@ -325,20 +356,14 @@ fn interleaved_bucket_writes_batch_in_staging() {
     heap.flush().unwrap();
 
     let counters = heap.io_counters();
-    assert!(counters.writes <= 16, "interleaved writes should remain staged, got {} requests", counters.writes);
+
+    assert!(
+        counters.writes <= 16,
+        "interleaved writes should remain staged, got {} requests",
+        counters.writes
+    );
 
     for (key, &id) in ids.iter().enumerate() {
         assert_record(&mut heap, id, 100 + key as u64, 200);
     }
-
-
-
-
-
-
-
 }
-
-
-
-
