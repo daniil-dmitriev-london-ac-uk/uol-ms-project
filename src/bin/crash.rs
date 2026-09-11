@@ -218,7 +218,11 @@ fn raw_slot(dir: &Path, id: u64) -> Slot {
 fn flip(dir: &Path, offset: u64) {
     use std::io::{Read, Seek, SeekFrom};
 
-    let mut file = std::fs::OpenOptions::new().read(true).write(true).open(dir.join("data.hs")).unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(dir.join("data.hs"))
+        .unwrap();
 
     file.seek(SeekFrom::Start(offset)).unwrap();
 
@@ -257,7 +261,10 @@ fn corrupt(args: &Args, csv: &mut Csv) {
                 "header-flip" => flip(&dir, raw_slot(&dir, ids[2500]).offset),
                 "truncate" => {
                     let slot = raw_slot(&dir, *ids.last().unwrap());
-                    let file = std::fs::OpenOptions::new().write(true).open(dir.join("data.hs")).unwrap();
+                    let file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(dir.join("data.hs"))
+                        .unwrap();
 
                     file.set_len(slot.offset + slot.total_len / 2).unwrap();
                 }
@@ -279,8 +286,14 @@ fn corrupt(args: &Args, csv: &mut Csv) {
                     LAYOUT_APPEND
                 };
 
-                heapstore::rebuild(&dir, &mut io, layout_id, true, &heap_config(SyncPolicy::None, true)).unwrap()
-
+                heapstore::rebuild(
+                    &dir,
+                    &mut io,
+                    layout_id,
+                    true,
+                    &heap_config(SyncPolicy::None, true),
+                )
+                .unwrap()
             } else {
                 let (_heap, recovery_report) =
                     LayoutHeap::open(layout, &dir, heap_config(SyncPolicy::None, true));
@@ -310,7 +323,8 @@ fn corrupt(args: &Args, csv: &mut Csv) {
                 stats.resyncs.to_string(),
                 stats.records.to_string(),
                 elapsed_ms.to_string(),
-            ]).unwrap();
+            ])
+            .unwrap();
 
             println!(
                 "corrupt {layout} {scenario}: lost {lost}, corrupted {corrupted}, resyncs {}, scanned {} records",
@@ -389,7 +403,8 @@ fn main() {
             let mut csv = Csv::open(
                 &args.out.join("corrupt.csv"),
                 "layout,scenario,records,lost,corrupted_served,resyncs,rebuilt_records,wall_ms",
-            ).unwrap();
+            )
+            .unwrap();
 
             corrupt(&args, &mut csv);
         }
@@ -446,10 +461,4 @@ fn main() {
             std::process::exit(2);
         }
     }
-
-
-
 }
-
-
-
