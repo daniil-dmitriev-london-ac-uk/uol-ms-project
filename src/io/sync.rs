@@ -1,3 +1,5 @@
+//! this module performs blocking file operations.
+
 use super::{BlockIo, IoCounters, ReadReq, WriteReq, fdatasync_counted};
 use crate::error::Result;
 

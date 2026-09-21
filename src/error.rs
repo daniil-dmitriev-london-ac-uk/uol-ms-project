@@ -1,3 +1,5 @@
+//! this module defines public storage errors
+
 use std::fmt;
 
 #[derive(Debug)]

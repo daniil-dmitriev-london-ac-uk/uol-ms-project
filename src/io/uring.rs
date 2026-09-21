@@ -1,3 +1,5 @@
+//! this module submits asynchronous kernel operations.
+
 use super::{BlockIo, IoCounters, ReadReq, WriteReq, fdatasync_counted};
 use crate::error::{HeapError, Result};
 
@@ -40,6 +42,7 @@ impl UringIo {
         let mut pending = 0usize;
         let mut error: Option<HeapError> = None;
 
+        // keep the queue full while requests remain.
         while next < segments.len() || pending > 0 {
             while pending < self.depth && next < segments.len() && error.is_none() {
                 let segment = &segments[next];
@@ -113,6 +116,7 @@ impl UringIo {
                     self.counters.write_bytes += completed_bytes as u64;
                 }
 
+                // short completions must continue from the remaining range.
                 if completed_bytes == segment.len || error.is_some() {
                     continue;
                 }

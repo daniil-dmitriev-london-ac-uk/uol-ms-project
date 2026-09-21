@@ -1,3 +1,5 @@
+//! this module defines the placement contract.
+
 use crate::data::{DataFile, PagedFile};
 use crate::error::Result;
 use crate::heap::HeapConfig;

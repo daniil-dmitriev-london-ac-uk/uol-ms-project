@@ -1,3 +1,5 @@
+//! bucket placement keeps related records physically close
+
 use crate::data::{DataFile, PagedFile};
 use crate::error::{HeapError, Result};
 use crate::format::{
@@ -99,6 +101,7 @@ impl BucketPlacement {
                 break new_extent;
             }
 
+            // splitting free tails avoids moving existing records
             let victim = self.states[victim_index]
                 .data
                 .last_mut()
@@ -245,6 +248,7 @@ impl Placement for BucketPlacement {
         registry: Option<&mut PagedFile>,
         created: bool,
     ) -> Result<(Self, OpenStats)> {
+        // registry entries make allocator decisions reproducible
         let registry = registry.expect("bucket layout requires registry");
         let mut placement = BucketPlacement {
             states: Vec::new(),

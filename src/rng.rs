@@ -1,3 +1,5 @@
+//! this module creates repeatable benchmark data.
+
 pub trait RandomSource {
     fn next_u64(&mut self) -> u64;
 

@@ -1,3 +1,5 @@
+//! this program exercises failure and recovery paths.
+
 use heapstore::error::HeapError;
 use heapstore::format::{LAYOUT_APPEND, LAYOUT_BUCKET, Slot};
 use heapstore::heap::{Heap, HeapConfig, SyncPolicy};

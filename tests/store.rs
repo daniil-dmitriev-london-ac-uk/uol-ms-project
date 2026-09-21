@@ -1,3 +1,5 @@
+//! these tests cover complete storage operations.
+
 mod common;
 
 use common::*;

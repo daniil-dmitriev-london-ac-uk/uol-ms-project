@@ -1,3 +1,5 @@
+//! this module provides shared test fixtures.
+
 use heapstore::heap::{Heap, HeapConfig};
 use heapstore::io::BlockIo;
 use heapstore::io::sync::SyncIo;

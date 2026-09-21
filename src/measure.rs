@@ -1,3 +1,5 @@
+//! this module records benchmark measurements.
+
 use std::io::Write;
 use std::path::Path;
 

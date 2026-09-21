@@ -1,3 +1,5 @@
+//! this module maps record numbers to data locations
+
 use crate::data::PagedFile;
 use crate::error::Result;
 use crate::format::{PAGE_SIZE_U64, SLOT_SIZE, Slot, SlotState, TOMBSTONE_BIT, page_down};
@@ -65,6 +67,7 @@ impl IndexFile {
             .map(|&id| page_down(Slot::file_offset(id)))
             .collect();
 
+        // adjacent pages can share one device request.
         pages.sort_unstable();
         pages.dedup();
 

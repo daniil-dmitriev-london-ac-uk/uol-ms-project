@@ -1,3 +1,5 @@
+//! this module measures reliability costs.
+
 use super::*;
 
 pub(super) fn cost_sync(args: &Args, csv: &mut Csv) {

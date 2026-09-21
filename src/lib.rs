@@ -1,3 +1,5 @@
+//! this library exposes the storage engine building blocks.
+
 pub mod append;
 pub mod bucket;
 pub mod crc32;

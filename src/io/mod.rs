@@ -1,3 +1,5 @@
+//! this module defines common input and output operations.
+
 pub mod sync;
 pub mod uring;
 

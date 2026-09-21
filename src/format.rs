@@ -1,3 +1,5 @@
+//! this module defines the durable byte format
+
 use crate::crc32::crc32c;
 
 pub const PAGE: usize = 4096;
@@ -83,6 +85,7 @@ impl RecordHeader {
         out[field_offset + 8..field_offset + 10].copy_from_slice(&self.version.to_le_bytes());
         out[field_offset + 10..field_offset + 14].copy_from_slice(&self.crc.to_le_bytes());
 
+        // header integrity is checked separately from payload integrity
         let header_crc = crc32c(&out[..field_offset + 14]);
 
         out[field_offset + 14..field_offset + 18].copy_from_slice(&header_crc.to_le_bytes());
@@ -159,6 +162,7 @@ impl Slot {
         let offset = u64::from_le_bytes(buf[..8].try_into().unwrap());
         let total_len = u64::from_le_bytes(buf[8..16].try_into().unwrap());
 
+        // tombstones prevent deleted records from returning
         if offset == 0 {
             SlotState::Empty
         } else if offset & TOMBSTONE_BIT != 0 {

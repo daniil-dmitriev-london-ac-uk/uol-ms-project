@@ -1,3 +1,5 @@
+//! this module runs the benchmark matrix.
+
 use super::*;
 
 pub(super) fn read_tests(args: &Args, csv: &mut Csv) {

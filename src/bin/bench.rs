@@ -1,3 +1,5 @@
+//! this program measures storage workloads.
+
 use heapstore::heap::{Heap, HeapConfig, SyncPolicy};
 use heapstore::io::IoCounters;
 use heapstore::io::sync::SyncIo;

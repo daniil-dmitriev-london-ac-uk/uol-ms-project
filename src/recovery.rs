@@ -1,3 +1,5 @@
+//! this module rebuilds state from durable records.
+
 use crate::crc32::crc32c;
 use crate::data::PagedFile;
 use crate::error::Result;
@@ -76,6 +78,7 @@ pub fn walk(
     }
 
     loop {
+        // discard scanned bytes to bound recovery memory
         if position - buffer_start > 8 * RECOVERY_SCAN_CHUNK_SIZE {
             buffer.drain(..(position - buffer_start) as usize);
             buffer_start = position;
@@ -191,6 +194,7 @@ pub fn rebuild(
                 _ => bucket_runs.push((header.bucket, offset, offset + record_len)),
             }
 
+            // the newest valid version wins during rebuilding.
             let entry = latest_records.entry(header.id).or_insert((
                 offset,
                 record_len,

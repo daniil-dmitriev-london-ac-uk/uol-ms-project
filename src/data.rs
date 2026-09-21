@@ -1,3 +1,5 @@
+//! this module stages and reads data pages
+
 use crate::crc32::crc32c;
 use crate::error::{HeapError, Result};
 use crate::format::{
@@ -149,6 +151,7 @@ impl PagedFile {
     pub fn stage(&mut self, io: &mut impl BlockIo, off: u64, parts: &[&[u8]]) -> Result<()> {
         let len: usize = parts.iter().map(|part| part.len()).sum();
 
+        // reuse open staged_writes to batch interleaved buckets.
         if let Some(staged_write_index) = self
             .staged_writes
             .iter()
@@ -179,6 +182,7 @@ impl PagedFile {
             }
         }
 
+        // bounded staged_writes keep lookup and memory costs predictable
         if self.staged_writes.len() >= MAX_STAGED_WRITES {
             self.flush(io)?;
         }
@@ -246,6 +250,7 @@ impl PagedFile {
                 .buffer
                 .resize_zeroed((page_up(end) - staged_write.base()) as usize);
 
+            // preserve unrelated bytes in a partial page
             if end % PAGE_SIZE_U64 != 0 {
                 let last = page_down(end);
                 let within = (end - last) as usize;

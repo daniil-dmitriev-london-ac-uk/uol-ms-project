@@ -1,3 +1,5 @@
+//! this module coordinates storage operations and durability
+
 use crate::data::{DataFile, PagedFile};
 use crate::error::{HeapError, Result};
 use crate::format::Slot;
@@ -85,6 +87,7 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
                 },
             )
         } else {
+            // data remains the source of truth after metadata loss
             let metadata_is_broken = |path: &Path, kind: u8, io: &mut I| {
                 !path.exists() || PagedFile::open(path, kind, P::LAYOUT, io).is_err()
             };
@@ -293,6 +296,7 @@ impl<I: BlockIo, P: Placement> Heap<I, P> {
             }
         }
 
+        // data must become durable before index entries
         self.data.paged_file.flush(&mut self.io)?;
         self.io.sync(&self.data.paged_file.file)?;
 
