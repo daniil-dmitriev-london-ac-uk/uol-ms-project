@@ -1,4 +1,4 @@
-//! this module computes record integrity checks
+//! this module computes record integrity checks.
 
 const CRC32C_POLYNOMIAL: u32 = 0x82F6_3B78;
 

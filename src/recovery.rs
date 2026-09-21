@@ -78,7 +78,7 @@ pub fn walk(
     }
 
     loop {
-        // discard scanned bytes to bound recovery memory
+        // discard scanned bytes to bound recovery memory.
         if position - buffer_start > 8 * RECOVERY_SCAN_CHUNK_SIZE {
             buffer.drain(..(position - buffer_start) as usize);
             buffer_start = position;

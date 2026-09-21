@@ -1,3 +1,5 @@
+//! these tests cover damaged and incomplete stores.
+
 mod common;
 
 use common::*;

@@ -1,4 +1,4 @@
-//! this module stages and reads data pages
+//! this module stages and reads data pages.
 
 use crate::crc32::crc32c;
 use crate::error::{HeapError, Result};
@@ -182,7 +182,7 @@ impl PagedFile {
             }
         }
 
-        // bounded staged_writes keep lookup and memory costs predictable
+        // bounded staged_writes keep lookup and memory costs predictable.
         if self.staged_writes.len() >= MAX_STAGED_WRITES {
             self.flush(io)?;
         }
@@ -250,7 +250,7 @@ impl PagedFile {
                 .buffer
                 .resize_zeroed((page_up(end) - staged_write.base()) as usize);
 
-            // preserve unrelated bytes in a partial page
+            // preserve unrelated bytes in a partial page.
             if end % PAGE_SIZE_U64 != 0 {
                 let last = page_down(end);
                 let within = (end - last) as usize;

@@ -1,4 +1,4 @@
-//! this module defines public storage errors
+//! this module defines public storage errors.
 
 use std::fmt;
 

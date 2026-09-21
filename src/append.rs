@@ -1,4 +1,4 @@
-//! append placement keeps records in allocation order
+//! append placement keeps records in allocation order.
 
 use crate::data::{DataFile, PagedFile};
 use crate::error::Result;
@@ -41,7 +41,7 @@ impl Placement for AppendPlacement {
             ));
         }
 
-        // updates can extend beyond the greatest record number
+        // updates can extend beyond the greatest record number.
         let index_size = index.paged_file.size()?;
         let mut next_id = 0u64;
         let mut max_end = PAGE_SIZE_U64;
@@ -96,7 +96,7 @@ impl Placement for AppendPlacement {
         let mut restored = 0u64;
         let mut updates: HashMap<u64, (u64, u16, u64)> = HashMap::new();
 
-        // only a contiguous tail is safe to restore
+        // only a contiguous tail is safe to restore.
         for &(id, offset, version, record_len) in &found {
             if id == next_id {
                 index.stage_slot(

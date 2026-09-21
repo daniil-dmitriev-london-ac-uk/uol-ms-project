@@ -1,4 +1,4 @@
-//! this module maps record numbers to data locations
+//! this module maps record numbers to data locations.
 
 use crate::data::PagedFile;
 use crate::error::Result;
