@@ -3,7 +3,7 @@ name = "heapstore"
 version = "0.1.0"
 edition = "2024"
 autobins = false
-description = "Embedded heap storage layer for variable-size records on NVMe/Linux (UOL MSc project)"
+description = "Database Heap Table Storage Subsystem (UOL MSc project)"
 
 [[bin]]
 name = "bench"
