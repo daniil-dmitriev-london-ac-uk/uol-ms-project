@@ -545,8 +545,6 @@ impl Placement for BucketPlacement {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,11 +552,10 @@ mod tests {
     use crate::format::{LAYOUT_BUCKET, PAGE_SIZE_U64};
     use crate::io::sync::SyncIo;
 
-
-
     #[test]
     fn grant_order_follows_section_scheme() {
-        let dir = std::path::PathBuf::from("target/testdata").join(format!("alloc-{}", std::process::id()));
+        let dir = std::path::PathBuf::from("target/testdata")
+            .join(format!("alloc-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
 
         std::fs::create_dir_all(&dir).unwrap();
@@ -569,22 +566,27 @@ mod tests {
             min_extent: 256 << 10,
             ..HeapConfig::default()
         };
-
         let mut data = DataFile {
-            paged_file: PagedFile::create(&dir.join("data.hs"), b'D', LAYOUT_BUCKET, &mut io).unwrap(),
+            paged_file: PagedFile::create(&dir.join("data.hs"), b'D', LAYOUT_BUCKET, &mut io)
+                .unwrap(),
             with_bucket: true,
-            integrity: true
+            integrity: true,
         };
-
         let mut index = IndexFile {
-            paged_file: PagedFile::create(&dir.join("index.hs"), b'I', LAYOUT_BUCKET, &mut io).unwrap()
+            paged_file: PagedFile::create(&dir.join("index.hs"), b'I', LAYOUT_BUCKET, &mut io)
+                .unwrap(),
         };
-
         let mut registry_file =
             PagedFile::create(&dir.join("registry.hs"), b'R', LAYOUT_BUCKET, &mut io).unwrap();
-
-        let (mut placement, _) = BucketPlacement::open(&mut io, &config, &mut data, &mut index, Some(&mut registry_file), true).unwrap();
-
+        let (mut placement, _) = BucketPlacement::open(
+            &mut io,
+            &config,
+            &mut data,
+            &mut index,
+            Some(&mut registry_file),
+            true,
+        )
+        .unwrap();
 
         for bucket in 0..4u64 {
             placement
@@ -594,27 +596,43 @@ mod tests {
                     &mut data,
                     Some(&mut registry_file),
                     bucket,
-                    138
+                    138,
                 )
                 .unwrap();
         }
 
-        let extents: Vec<Extent> = placement.states.iter().map(|bucket_state| *bucket_state.data.last().unwrap()).collect();
-        
+        let extents: Vec<Extent> = placement
+            .states
+            .iter()
+            .map(|bucket_state| *bucket_state.data.last().unwrap())
+            .collect();
         let original_first_bucket_end = PAGE_SIZE_U64 + (config.initial_size - PAGE_SIZE_U64);
 
         assert_eq!(placement.states[0].data[0].start, PAGE_SIZE_U64);
-        assert_eq!(extents[1].start, extents[0].start + extents[0].size + extents[2].size);
-        assert!(extents[2].start >= PAGE_SIZE_U64 && extents[2].start + extents[2].size <= original_first_bucket_end);
+        assert_eq!(
+            extents[1].start,
+            extents[0].start + extents[0].size + extents[2].size
+        );
+        assert!(
+            extents[2].start >= PAGE_SIZE_U64
+                && extents[2].start + extents[2].size <= original_first_bucket_end
+        );
         assert!(extents[2].start == extents[0].start + extents[0].size);
         assert!(extents[3].start == extents[1].start + extents[1].size);
 
-        let mut all_extents: Vec<Extent> = placement.states.iter().flat_map(|bucket_state| bucket_state.data.iter().copied()).collect();
+        let mut all_extents: Vec<Extent> = placement
+            .states
+            .iter()
+            .flat_map(|bucket_state| bucket_state.data.iter().copied())
+            .collect();
 
         all_extents.sort_by_key(|extent| extent.start);
 
         for adjacent_extents in all_extents.windows(2) {
-            assert!(adjacent_extents[0].start + adjacent_extents[0].size <= adjacent_extents[1].start, "extents overlap: {all_extents:?}");
+            assert!(
+                adjacent_extents[0].start + adjacent_extents[0].size <= adjacent_extents[1].start,
+                "extents overlap: {all_extents:?}"
+            );
         }
 
         for extent in &all_extents {
@@ -625,32 +643,39 @@ mod tests {
         registry_file.flush(&mut io).unwrap();
         io.sync(&registry_file.file).unwrap();
 
-        let (reopened_placement, _) = BucketPlacement::open(&mut io, &config, &mut data, &mut index, Some(&mut registry_file), false).unwrap();
+        let (reopened_placement, _) = BucketPlacement::open(
+            &mut io,
+            &config,
+            &mut data,
+            &mut index,
+            Some(&mut registry_file),
+            false,
+        )
+        .unwrap();
 
-        for (original_state, reopened_state) in placement.states.iter().zip(reopened_placement.states.iter())
+        for (original_state, reopened_state) in placement
+            .states
+            .iter()
+            .zip(reopened_placement.states.iter())
         {
             assert_eq!(original_state.id, reopened_state.id);
 
-            let original_extents: Vec<(u64, u64)> = original_state.data.iter().map(|extent| (extent.start, extent.size)).collect();
-            let reopened_extents: Vec<(u64, u64)> = reopened_state.data.iter().map(|extent| (extent.start, extent.size)).collect();
+            let original_extents: Vec<(u64, u64)> = original_state
+                .data
+                .iter()
+                .map(|extent| (extent.start, extent.size))
+                .collect();
+            let reopened_extents: Vec<(u64, u64)> = reopened_state
+                .data
+                .iter()
+                .map(|extent| (extent.start, extent.size))
+                .collect();
 
-            assert_eq!(original_extents, reopened_extents, "registry replay differs for bucket {}", original_state.id);
+            assert_eq!(
+                original_extents, reopened_extents,
+                "registry replay differs for bucket {}",
+                original_state.id
+            );
         }
-
-
-
-
     }
-
-
-
-    
 }
-
-
-
-
-
-
-
-

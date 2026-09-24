@@ -20,7 +20,11 @@ fn splitmix64_reference() {
 
     let repeated_values: Vec<u64> = (0..8).map(|_| SplitMix64::new(7).next_u64()).collect();
 
-    assert!(repeated_values.windows(2).all(|window| window[0] == window[1]));
+    assert!(
+        repeated_values
+            .windows(2)
+            .all(|window| window[0] == window[1])
+    );
     assert_ne!(SplitMix64::new(1).next_u64(), SplitMix64::new(2).next_u64());
 
     let mut fill_rng = SplitMix64::new(3);
@@ -59,7 +63,6 @@ fn record_header_roundtrip_both_layouts() {
             version: 3,
             crc: 0xDEADBEEF,
         };
-
         let mut buffer = vec![0u8; header_size];
 
         header.encode(with_bucket, &mut buffer);
@@ -81,13 +84,8 @@ fn record_header_roundtrip_both_layouts() {
                 RecordHeader::decode(&corrupted, with_bucket).is_none(),
                 "byte {byte_index} undetected"
             );
-
         }
-
-
     }
-
-
 }
 
 #[test]
@@ -98,7 +96,6 @@ fn slot_zero_means_empty() {
         offset: 4096,
         total_len: 68,
     };
-
     let mut buffer = [0u8; 16];
 
     slot.encode(&mut buffer);
@@ -106,7 +103,6 @@ fn slot_zero_means_empty() {
     assert_eq!(Slot::decode(&buffer), Some(slot));
     assert_eq!(Slot::file_offset(10), 4096 + 160);
 }
-
 
 #[test]
 fn registry_row_roundtrip_and_corruption() {
@@ -116,7 +112,6 @@ fn registry_row_roundtrip_and_corruption() {
         start: 4096,
         size: 1 << 20,
     };
-
     let mut buffer = [0u8; 64];
 
     row.encode(&mut buffer);
