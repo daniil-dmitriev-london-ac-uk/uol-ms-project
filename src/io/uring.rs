@@ -26,6 +26,10 @@ pub struct UringIo {
 
 impl UringIo {
     pub fn new(depth: u32, chunk: usize) -> Result<Self> {
+        if chunk == 0 {
+            return Err(HeapError::InvalidArg("io chunk must be greater than zero"));
+        }
+
         let depth = depth.max(1);
 
         Ok(UringIo {
